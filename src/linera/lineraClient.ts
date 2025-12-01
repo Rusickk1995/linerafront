@@ -1,75 +1,47 @@
 // src/linera/lineraClient.ts
 //
-// ЕДИНЫЙ клиент для твоего Linera-покера:
+// Клиент для Linera Poker (GraphQL service.rs).
 //
-// 1) Read-only запросы в service.rs (PokerService::handle_query):
-//    - fetchTable / fetchTables
-//    - fetchTournament / fetchTournaments / fetchTournamentTables
+// Все операции (READ + WRITE) идут через GraphQL endpoint:
 //
-// 2) Команды в contract.rs (Operation::Command(Command)):
-//    - createTournament / registerToTournament / ... / sendPlayerAction
+//   VITE_LINERA_SERVICE_URL = "http://localhost:8081/chains/<CHAIN_ID>/applications/<APP_ID>"
 //
-// Сетевые детали абстрагированы через две переменные окружения:
-//
-//   VITE_LINERA_SERVICE_URL  -> HTTP endpoint, который принимает JSON-query
-//                              и прокидывает его в PokerService::handle_query.
-//
-//   VITE_LINERA_COMMAND_URL  -> HTTP endpoint, который принимает JSON-command
-//                              и прокидывает её в PokerContract::execute_operation.
-//
-// Всё, что ниже, настроено так, чтобы:
-//
-// - не падать по типовым мелким ошибкам;
-// - максимально прозрачно логировать неожиданные ответы;
-// - всегда возвращать фронту строго типизированный результат.
+// service.rs внутри сам вызывает schedule_operation(&Operation::Command(...)).
 
 import type {
+  OnChainCard,
+  OnChainPlayerAtTableDto,
   OnChainTableViewDto,
   OnChainTournamentViewDto,
 } from "../types/onchain";
-import type { TournamentConfig } from "../types/poker";
+import type {
+  AnteType,
+  BlindLevel,
+  BlindPace,
+  PayoutType,
+  TournamentConfig,
+} from "../types/poker";
 
 // ============================================================================
-//                ENV-ПЕРЕМЕННЫЕ И БАЗОВЫЕ ВСПОМОГАТЕЛЬНЫЕ Ф-ЦИИ
+//                   ENV и базовые сетевые хелперы
 // ============================================================================
 
-/**
- * URL для read-only запросов (PokerService).
- * Пример:
- *   http://localhost:8081/chains/<CHAIN_ID>/applications/<APP_ID>
- */
 const SERVICE_URL =
   (import.meta as any).env.VITE_LINERA_SERVICE_URL as string | undefined;
 
-/**
- * URL для команд (PokerContract).
- * Это может быть:
- *   - прямой прокси к `linera service`;
- *   - маленький backend (Node / Rust), который сам дергает `linera` CLI;
- *   - любой другой шлюз, который понимает наш JSON.
- */
-const COMMAND_URL =
-  (import.meta as any).env.VITE_LINERA_COMMAND_URL as string | undefined;
-
-/**
- * Жёстко требуем наличие env-переменных.
- * Если их нет – кидаем понятную ошибку сразу при первом запросе.
- */
 function requireEnv(name: string, value: string | undefined): string {
   if (!value) {
     throw new Error(
-      `Missing env variable ${name}. ` +
-        `Configure import.meta.env.${name} in your Vite setup (.env, .env.local, etc.).`
+      `Missing env variable ${name}. Configure import.meta.env.${name} (e.g. in .env.local).`
     );
   }
   return value;
 }
 
-/**
- * Универсальный POST JSON → JSON.
- * Добавляет в ошибку статус, статус-текст и body ответа, если есть.
- */
-async function postJson<TResponse>(url: string, body: unknown): Promise<TResponse> {
+async function postJson<TResponse>(
+  url: string,
+  body: unknown
+): Promise<TResponse> {
   let res: Response;
 
   try {
@@ -80,14 +52,20 @@ async function postJson<TResponse>(url: string, body: unknown): Promise<TRespons
       },
       body: JSON.stringify(body),
     });
-  } catch (networkError: any) {
+  } catch (networkError: unknown) {
     console.error("[lineraClient] Network error", {
       url,
       body,
       error: networkError,
     });
+
+    const message =
+      networkError instanceof Error
+        ? networkError.message
+        : String(networkError);
+
     throw new Error(
-      `Network error while calling Linera endpoint ${url}: ${networkError?.message ?? networkError}`
+      `Network error while calling Linera endpoint ${url}: ${message}`
     );
   }
 
@@ -105,47 +83,476 @@ async function postJson<TResponse>(url: string, body: unknown): Promise<TRespons
     );
   }
 
-  try {
-    return (await res.json()) as TResponse;
-  } catch (parseError: any) {
-    const text = await res.text().catch(() => "");
-    console.error("[lineraClient] JSON parse error", {
-      url,
-      body,
-      error: parseError,
-      rawBody: text,
-    });
-    throw new Error(
-      `Failed to parse JSON from Linera endpoint ${url}: ${parseError?.message ?? parseError}`
-    );
-  }
+  const json = (await res.json()) as TResponse;
+  return json;
 }
 
-/**
- * Обёртка для вызова read-only сервиса (PokerService).
- */
-async function callService<TResponse>(payload: unknown): Promise<TResponse> {
+interface GraphQLResponse<TData> {
+  data?: TData;
+  errors?: { message: string }[];
+}
+
+async function callServiceGraphQL<TData>(
+  query: string,
+  variables?: Record<string, unknown>
+): Promise<TData> {
   const url = requireEnv("VITE_LINERA_SERVICE_URL", SERVICE_URL);
-  return postJson<TResponse>(url, payload);
-}
 
-/**
- * Обёртка для вызова командного шлюза (PokerContract / Command).
- */
-async function callCommand<TResponse>(payload: unknown): Promise<TResponse> {
-  const url = requireEnv("VITE_LINERA_COMMAND_URL", COMMAND_URL);
-  return postJson<TResponse>(url, payload);
+  const payload = { query, variables };
+  const resp = await postJson<GraphQLResponse<TData>>(url, payload);
+
+  if (resp.errors && resp.errors.length > 0) {
+    console.error("[lineraClient] GraphQL errors", resp.errors);
+    const msg = resp.errors.map((e) => e.message).join("; ");
+    throw new Error(`Linera GraphQL error: ${msg}`);
+  }
+
+  if (!resp.data) {
+    throw new Error("Linera GraphQL error: missing `data` in response");
+  }
+
+  return resp.data;
 }
 
 // ============================================================================
-//                  ТИПЫ КОМАНД (ФРОНТОВЫЙ УРОВЕНЬ)
+//              ВНУТРЕННИЕ типы (как в service.rs / GraphQL)
 // ============================================================================
 
-/**
- * Игровое действие игрока.
- * Это фронтовое представление; на бэке ты его сопоставляешь
- * с poker_engine::engine::actions::PlayerActionKind.
- */
+type GqlAnteType = "None" | "Classic" | "BigBlind";
+
+type GqlPlayerActionKind =
+  | "Fold"
+  | "Check"
+  | "Call"
+  | "Bet"
+  | "Raise"
+  | "AllIn";
+
+interface GqlCard {
+  rank: string;
+  suit: string;
+}
+
+interface GqlPlayerAtTable {
+  playerId: number;
+  displayName: string;
+  seatIndex: number;
+  stack: number;
+  currentBet: number;
+  status: string;
+  holeCards?: GqlCard[] | null;
+}
+
+interface GqlTableView {
+  tableId: number;
+  name: string;
+  maxSeats: number;
+  smallBlind: number;
+  bigBlind: number;
+  ante: number;
+  street: string;
+  dealerButton?: number | null;
+  totalPot: number;
+  board: GqlCard[];
+  players: GqlPlayerAtTable[];
+  handInProgress: boolean;
+  currentActorSeat?: number | null;
+}
+
+interface GqlTournamentView {
+  tournamentId: number;
+  name: string;
+  status: string;
+  currentLevel: number;
+  playersRegistered: number;
+  tablesRunning: number;
+}
+
+interface GqlSummary {
+  totalHandsPlayed: number;
+  tablesCount: number;
+  tournamentsCount: number;
+}
+
+export interface SummaryResponse {
+  total_hands_played: number;
+  tables_count: number;
+  tournaments_count: number;
+}
+
+export interface MutationAck {
+  ok: boolean;
+  message: string;
+}
+
+// ============================================================================
+//           Маппинги GQL <-> твои DTO (snake_case формы)
+// ============================================================================
+
+function mapCard(g: GqlCard): OnChainCard {
+  return { rank: g.rank, suit: g.suit };
+}
+
+function mapPlayer(g: GqlPlayerAtTable): OnChainPlayerAtTableDto {
+  return {
+    player_id: g.playerId,
+    display_name: g.displayName,
+    seat_index: g.seatIndex,
+    stack: g.stack,
+    current_bet: g.currentBet,
+    status: g.status,
+    hole_cards: g.holeCards ? g.holeCards.map(mapCard) : null,
+  };
+}
+
+function mapTable(g: GqlTableView): OnChainTableViewDto {
+  return {
+    table_id: g.tableId,
+    name: g.name,
+    max_seats: g.maxSeats,
+    small_blind: g.smallBlind,
+    big_blind: g.bigBlind,
+    ante: g.ante,
+    street: g.street,
+    dealer_button: g.dealerButton ?? null,
+    total_pot: g.totalPot,
+    board: g.board.map(mapCard),
+    players: g.players.map(mapPlayer),
+    hand_in_progress: g.handInProgress,
+    current_actor_seat: g.currentActorSeat ?? null,
+  };
+}
+
+function mapTournament(g: GqlTournamentView): OnChainTournamentViewDto {
+  return {
+    tournament_id: g.tournamentId,
+    name: g.name,
+    status: g.status,
+    current_level: g.currentLevel,
+    players_registered: g.playersRegistered,
+    tables_running: g.tablesRunning,
+  };
+}
+
+function mapSummary(g: GqlSummary): SummaryResponse {
+  return {
+    total_hands_played: g.totalHandsPlayed,
+    tables_count: g.tablesCount,
+    tournaments_count: g.tournamentsCount,
+  };
+}
+
+// ============================================================================
+//                           READ-ONLY ЧАСТЬ
+// ============================================================================
+
+export async function fetchTable(
+  tableId: number
+): Promise<OnChainTableViewDto | null> {
+  const query = `
+    query FetchTable($tableId: Int!) {
+      table(tableId: $tableId) {
+        tableId
+        name
+        maxSeats
+        smallBlind
+        bigBlind
+        ante
+        street
+        dealerButton
+        totalPot
+        board { rank suit }
+        players {
+          playerId
+          displayName
+          seatIndex
+          stack
+          currentBet
+          status
+          holeCards { rank suit }
+        }
+        handInProgress
+        currentActorSeat
+      }
+    }
+  `;
+
+  type Resp = { table: GqlTableView | null };
+
+  const data = await callServiceGraphQL<Resp>(query, { tableId });
+  if (!data.table) return null;
+  return mapTable(data.table);
+}
+
+export async function fetchTables(): Promise<OnChainTableViewDto[]> {
+  const query = `
+    query FetchTables {
+      tables {
+        tableId
+        name
+        maxSeats
+        smallBlind
+        bigBlind
+        ante
+        street
+        dealerButton
+        totalPot
+        board { rank suit }
+        players {
+          playerId
+          displayName
+          seatIndex
+          stack
+          currentBet
+          status
+          holeCards { rank suit }
+        }
+        handInProgress
+        currentActorSeat
+      }
+    }
+  `;
+
+  type Resp = { tables: GqlTableView[] };
+
+  const data = await callServiceGraphQL<Resp>(query);
+  return data.tables.map(mapTable);
+}
+
+export async function fetchTournaments(): Promise<OnChainTournamentViewDto[]> {
+  const query = `
+    query FetchTournaments {
+      tournaments {
+        tournamentId
+        name
+        status
+        currentLevel
+        playersRegistered
+        tablesRunning
+      }
+    }
+  `;
+
+  type Resp = { tournaments: GqlTournamentView[] };
+
+  const data = await callServiceGraphQL<Resp>(query);
+  return data.tournaments.map(mapTournament);
+}
+
+export async function fetchTournament(
+  tournamentId: number
+): Promise<OnChainTournamentViewDto | null> {
+  const query = `
+    query FetchTournament($tournamentId: Int!) {
+      tournament_by_id(tournamentId: $tournamentId) {
+        tournamentId
+        name
+        status
+        currentLevel
+        playersRegistered
+        tablesRunning
+      }
+    }
+  `;
+
+  type Resp = { tournament_by_id: GqlTournamentView | null };
+
+  const data = await callServiceGraphQL<Resp>(query, { tournamentId });
+  if (!data.tournament_by_id) return null;
+  return mapTournament(data.tournament_by_id);
+}
+
+export async function fetchTournamentTables(
+  tournamentId: number
+): Promise<OnChainTableViewDto[]> {
+  const query = `
+    query FetchTournamentTables($tournamentId: Int!) {
+      tournament_tables(tournamentId: $tournamentId) {
+        tableId
+        name
+        maxSeats
+        smallBlind
+        bigBlind
+        ante
+        street
+        dealerButton
+        totalPot
+        board { rank suit }
+        players {
+          playerId
+          displayName
+          seatIndex
+          stack
+          currentBet
+          status
+          holeCards { rank suit }
+        }
+        handInProgress
+        currentActorSeat
+      }
+    }
+  `;
+
+  type Resp = { tournament_tables: GqlTableView[] };
+
+  const data = await callServiceGraphQL<Resp>(query, { tournamentId });
+  return data.tournament_tables.map(mapTable);
+}
+
+export async function fetchSummary(): Promise<SummaryResponse> {
+  const query = `
+    query FetchSummary {
+      summary {
+        totalHandsPlayed
+        tablesCount
+        tournamentsCount
+      }
+    }
+  `;
+
+  type Resp = { summary: GqlSummary };
+
+  const data = await callServiceGraphQL<Resp>(query);
+  return mapSummary(data.summary);
+}
+
+// ============================================================================
+//                           МУТАЦИИ (contract commands)
+// ============================================================================
+
+export async function createTable(params: {
+  tableId: number;
+  name: string;
+  maxSeats: number;
+  smallBlind: number;
+  bigBlind: number;
+  ante: number;
+  anteType: GqlAnteType;
+}): Promise<MutationAck> {
+  const query = `
+    mutation CreateTable(
+      $tableId: Int!,
+      $name: String!,
+      $maxSeats: Int!,
+      $smallBlind: Int!,
+      $bigBlind: Int!,
+      $ante: Int!,
+      $anteType: GqlAnteType!
+    ) {
+      createTable(
+        tableId: $tableId,
+        name: $name,
+        maxSeats: $maxSeats,
+        smallBlind: $smallBlind,
+        bigBlind: $bigBlind,
+        ante: $ante,
+        anteType: $anteType
+      ) {
+        ok
+        message
+      }
+    }
+  `;
+
+  type Resp = { createTable: MutationAck };
+
+  const data = await callServiceGraphQL<Resp>(query, params);
+  return data.createTable;
+}
+
+export async function seatPlayer(params: {
+  tableId: number;
+  playerId: number;
+  seatIndex: number;
+  displayName: string;
+  initialStack: number;
+}): Promise<MutationAck> {
+  const query = `
+    mutation SeatPlayer(
+      $tableId: Int!,
+      $playerId: Int!,
+      $seatIndex: Int!,
+      $displayName: String!,
+      $initialStack: Int!
+    ) {
+      seatPlayer(
+        tableId: $tableId,
+        playerId: $playerId,
+        seatIndex: $seatIndex,
+        displayName: $displayName,
+        initialStack: $initialStack
+      ) {
+        ok
+        message
+      }
+    }
+  `;
+
+  type Resp = { seatPlayer: MutationAck };
+
+  const data = await callServiceGraphQL<Resp>(query, params);
+  return data.seatPlayer;
+}
+
+export async function unseatPlayer(params: {
+  tableId: number;
+  seatIndex: number;
+}): Promise<MutationAck> {
+  const query = `
+    mutation UnseatPlayer($tableId: Int!, $seatIndex: Int!) {
+      unseatPlayer(tableId: $tableId, seatIndex: $seatIndex) {
+        ok
+        message
+      }
+    }
+  `;
+
+  type Resp = { unseatPlayer: MutationAck };
+
+  const data = await callServiceGraphQL<Resp>(query, params);
+  return data.unseatPlayer;
+}
+
+export async function adjustStack(params: {
+  tableId: number;
+  seatIndex: number;
+  delta: number;
+}): Promise<MutationAck> {
+  const query = `
+    mutation AdjustStack($tableId: Int!, $seatIndex: Int!, $delta: Int!) {
+      adjustStack(tableId: $tableId, seatIndex: $seatIndex, delta: $delta) {
+        ok
+        message
+      }
+    }
+  `;
+
+  type Resp = { adjustStack: MutationAck };
+
+  const data = await callServiceGraphQL<Resp>(query, params);
+  return data.adjustStack;
+}
+
+export async function startHand(params: {
+  tableId: number;
+  handId: number;
+}): Promise<MutationAck> {
+  const query = `
+    mutation StartHand($tableId: Int!, $handId: Int!) {
+      startHand(tableId: $tableId, handId: $handId) {
+        ok
+        message
+      }
+    }
+  `;
+
+  type Resp = { startHand: MutationAck };
+
+  const data = await callServiceGraphQL<Resp>(query, params);
+  return data.startHand;
+}
+
+// UI action тип
 export type PlayerActionKindUi =
   | "fold"
   | "check"
@@ -154,342 +561,404 @@ export type PlayerActionKindUi =
   | "raise"
   | "all_in";
 
-/**
- * Общий формат payload'а для TableCommand.
- */
-export interface PlayerActionCommandPayload {
-  table_id: number;
+function mapUiActionToGql(kind: PlayerActionKindUi): GqlPlayerActionKind {
+  switch (kind) {
+    case "fold":
+      return "Fold";
+    case "check":
+      return "Check";
+    case "call":
+      return "Call";
+    case "bet":
+      return "Bet";
+    case "raise":
+      return "Raise";
+    case "all_in":
+      return "AllIn";
+  }
+}
+
+export async function playerAction(params: {
+  tableId: number;
   action: PlayerActionKindUi;
   amount?: number;
+}): Promise<MutationAck> {
+  const query = `
+    mutation PlayerAction(
+      $tableId: Int!,
+      $action: GqlPlayerActionKind!,
+      $amount: Int
+    ) {
+      playerAction(tableId: $tableId, action: $action, amount: $amount) {
+        ok
+        message
+      }
+    }
+  `;
+
+  const variables = {
+    tableId: params.tableId,
+    action: mapUiActionToGql(params.action),
+    amount: params.amount ?? null,
+  };
+
+  type Resp = { playerAction: MutationAck };
+
+  const data = await callServiceGraphQL<Resp>(query, variables);
+  return data.playerAction;
 }
 
-// ---------- Турнирные команды (TournamentCommand) ----------
+export async function tickTable(params: {
+  tableId: number;
+  deltaSecs: number;
+}): Promise<MutationAck> {
+  const query = `
+    mutation TickTable($tableId: Int!, $deltaSecs: Int!) {
+      tickTable(tableId: $tableId, deltaSecs: $deltaSecs) {
+        ok
+        message
+      }
+    }
+  `;
 
-type TournamentCommandType =
-  | "create_tournament"
-  | "register_player"
-  | "unregister_player"
-  | "start_tournament"
-  | "advance_level"
-  | "close_tournament";
+  type Resp = { tickTable: MutationAck };
 
-/**
- * Базовый shape для всех турнирных команд.
- */
-interface TournamentCommandPayloadBase {
-  kind: "tournament_command";
-  command_type: TournamentCommandType;
+  const data = await callServiceGraphQL<Resp>(query, params);
+  return data.tickTable;
 }
-
-/**
- * Payload для create_tournament: несём полный TournamentConfig из UI.
- * На Rust-стороне есть UiTournamentConfig → TournamentConfig.
- */
-interface CreateTournamentPayload extends TournamentCommandPayloadBase {
-  command_type: "create_tournament";
-  ui_config: TournamentConfig;
-}
-
-/**
- * Базовый payload "по id турнира".
- */
-interface SimpleTournamentIdPayload extends TournamentCommandPayloadBase {
-  tournament_id: number;
-}
-
-type RegisterTournamentPayload = SimpleTournamentIdPayload & {
-  command_type: "register_player";
-};
-
-type UnregisterTournamentPayload = SimpleTournamentIdPayload & {
-  command_type: "unregister_player";
-};
-
-type StartTournamentPayload = SimpleTournamentIdPayload & {
-  command_type: "start_tournament";
-};
-
-type AdvanceLevelPayload = SimpleTournamentIdPayload & {
-  command_type: "advance_level";
-};
-
-type CloseTournamentPayload = SimpleTournamentIdPayload & {
-  command_type: "close_tournament";
-};
-
-type TournamentCommandPayload =
-  | CreateTournamentPayload
-  | RegisterTournamentPayload
-  | UnregisterTournamentPayload
-  | StartTournamentPayload
-  | AdvanceLevelPayload
-  | CloseTournamentPayload;
 
 // ============================================================================
-//                           READ-ONLY ЧАСТЬ (service.rs)
+//                       ТУРНИРНЫЕ МУТАЦИИ (низкий уровень)
 // ============================================================================
 
-/**
- * 1) ОДИН стол по table_id.
- *
- * PokerService::handle_query ожидает JSON:
- *   { "type": "table", "table_id": <id> }
- */
-export async function fetchTable(
-  tableId: number
-): Promise<OnChainTableViewDto> {
-  return callService<OnChainTableViewDto>({
-    type: "table",
-    table_id: tableId,
-  });
+interface WireTournamentConfig {
+  name: string;
+  description: string;
+  prize_description: string;
+  start_time: string;
+  reg_close_time: string;
+  table_size: number;
+  action_time: number;
+  blind_level_duration: number;
+  blind_pace: BlindPace;
+  starting_stack: number;
+  max_players: number;
+  late_reg_minutes: number;
+  ante_type: AnteType;
+  is_progressive_ante: boolean;
+  payout_type: PayoutType;
+  min_payout_places: number;
+  guaranteed_prize_pool: number;
+  is_bounty: boolean;
+  bounty_amount: number;
+  has_final_table_bonus: boolean;
+  final_table_bonus: number;
+  time_bank_seconds: number;
+  break_every_minutes: number;
+  break_duration_minutes: number;
+  instant_registration: boolean;
+  reentry_allowed: boolean;
+  rebuys_allowed: boolean;
+  blind_levels: BlindLevel[];
+  min_players_to_start: number;
+  freezeout: boolean;
 }
 
-/**
- * 2) ВСЕ столы.
- *
- * Query:
- *   { "type": "tables" }
- *
- * Ответом должен быть массив TableViewDto.
- */
-export async function fetchTables(): Promise<OnChainTableViewDto[]> {
-  const json = await callService<unknown>({
-    type: "tables",
-  });
+// Явное приведение UI-конфига к формату, который ждёт Rust `TournamentConfig`.
+function mapUiTournamentConfigToWire(
+  config: TournamentConfig
+): WireTournamentConfig {
+  const cfgWithOptional = config as TournamentConfig & {
+    minPlayersToStart?: number;
+  };
 
-  if (!Array.isArray(json)) {
-    console.error("[lineraClient] Unexpected response for fetchTables", json);
-    throw new Error("Invalid tables response from Linera service (expected array)");
-  }
+  const minPlayersToStart =
+    cfgWithOptional.minPlayersToStart ??
+    config.maxPlayers ??
+    config.tableSize ??
+    2;
 
-  return json as OnChainTableViewDto[];
-}
-
-/**
- * 3) ВСЕ турниры (то, что использует Lobby).
- *
- * Query:
- *   { "type": "tournaments" }
- *
- * PokerService::handle_tournaments формирует:
- *   Vec<TournamentViewDto> → чистый JSON-массив.
- *
- * Но на всякий случай добавлена защита, если шлюз / backend оборачивает
- * результат в объект, например: { tournaments: [...] }.
- */
-export async function fetchTournaments(): Promise<OnChainTournamentViewDto[]> {
-  const json = await callService<unknown>({
-    type: "tournaments",
-  });
-
-  // Нормальный ожидаемый вариант: сразу массив DTO.
-  if (Array.isArray(json)) {
-    return json as OnChainTournamentViewDto[];
-  }
-
-  // Защитный вариант: вдруг backend/прокси завернул в объект.
-  if (
-    json &&
-    typeof json === "object" &&
-    Array.isArray((json as any).tournaments)
-  ) {
-    console.warn(
-      "[lineraClient] fetchTournaments: response has shape { tournaments: [...] }, " +
-        "adapting to OnChainTournamentViewDto[]."
-    );
-    return (json as any).tournaments as OnChainTournamentViewDto[];
-  }
-
-  // Всё остальное считаем ошибкой.
-  console.error("[lineraClient] Unexpected response for fetchTournaments", json);
-  throw new Error(
-    "Invalid tournaments response from Linera service (expected array of tournaments)"
-  );
-}
-
-/**
- * 4) ОДИН турнир по id.
- *
- * Query:
- *   { "type": "tournament_by_id", "tournament_id": <id> }
- */
-export async function fetchTournament(
-  tournamentId: number
-): Promise<OnChainTournamentViewDto> {
-  return callService<OnChainTournamentViewDto>({
-    type: "tournament_by_id",
-    tournament_id: tournamentId,
-  });
-}
-
-/**
- * 5) Столы конкретного турнира.
- *
- * Query:
- *   { "type": "tournament_tables", "tournament_id": <id> }
- */
-export async function fetchTournamentTables(
-  tournamentId: number
-): Promise<OnChainTableViewDto[]> {
-  const json = await callService<unknown>({
-    type: "tournament_tables",
-    tournament_id: tournamentId,
-  });
-
-  if (!Array.isArray(json)) {
-    console.error(
-      "[lineraClient] Unexpected response for fetchTournamentTables",
-      json
-    );
-    throw new Error(
-      "Invalid tournament tables response from Linera service (expected array)"
-    );
-  }
-
-  return json as OnChainTableViewDto[];
-}
-
-/**
- * (Опционально, если где-то пригодится)
- * 6) Краткое summary: всего раздач / столов / турниров.
- *
- * Query:
- *   { "type": "summary" }
- *
- * Ответ:
- *   { "total_hands_played": u64, "tables_count": u64, "tournaments_count": u64 }
- */
-export interface SummaryResponse {
-  total_hands_played: number;
-  tables_count: number;
-  tournaments_count: number;
-}
-
-export async function fetchSummary(): Promise<SummaryResponse> {
-  const json = await callService<unknown>({ type: "summary" });
-
-  if (!json || typeof json !== "object") {
-    console.error("[lineraClient] Unexpected response for fetchSummary", json);
-    throw new Error("Invalid summary response from Linera service");
-  }
-
-  const obj = json as any;
+  const freezeout = !config.reEntryAllowed && !config.rebuysAllowed;
 
   return {
-    total_hands_played: Number(obj.total_hands_played ?? 0),
-    tables_count: Number(obj.tables_count ?? 0),
-    tournaments_count: Number(obj.tournaments_count ?? 0),
+    name: config.name,
+    description: config.description,
+    prize_description: config.prizeDescription,
+    start_time: config.startTime,
+    reg_close_time: config.regCloseTime,
+    table_size: config.tableSize,
+    action_time: config.actionTime,
+    blind_level_duration: config.blindLevelDuration,
+    blind_pace: config.blindPace,
+    starting_stack: config.startingStack,
+    max_players: config.maxPlayers,
+    late_reg_minutes: config.lateRegMinutes,
+    ante_type: config.anteType,
+    is_progressive_ante: config.isProgressiveAnte,
+    payout_type: config.payoutType,
+    min_payout_places: config.minPayoutPlaces,
+    guaranteed_prize_pool: config.guaranteedPrizePool,
+    is_bounty: config.isBounty,
+    bounty_amount: config.bountyAmount,
+    has_final_table_bonus: config.hasFinalTableBonus,
+    final_table_bonus: config.finalTableBonus,
+    time_bank_seconds: config.timeBankSeconds,
+    break_every_minutes: config.breakEveryMinutes,
+    break_duration_minutes: config.breakDurationMinutes,
+    instant_registration: config.instantRegistration,
+    reentry_allowed: config.reEntryAllowed,
+    rebuys_allowed: config.rebuysAllowed,
+    blind_levels: config.blindLevels,
+    min_players_to_start: minPlayersToStart,
+    freezeout,
   };
 }
 
-// ============================================================================
-//                               МУТАЦИИ (COMMAND)
-// ============================================================================
-//
-// Тут мы НЕ лезем в детали BCS/GraphQL Linera.
-// Клиент формирует честный JSON-payload, где явно указано:
-//
-//   kind: "tournament_command" | "table_command"
-//   command_type: "create_tournament" | ...
-//
-// На стороне Rust:
-//
-//   - маленький HTTP-прокси читает JSON;
-//   - маппит его в enum Command / TournamentCommand / TableCommand;
-//   - шлёт Operation::Command(Command) в linera-client / wallet.
+async function createTournamentMutation(params: {
+  tournamentId: number;
+  config: TournamentConfig;
+}): Promise<MutationAck> {
+  const query = `
+    mutation CreateTournament($tournamentId: Int!, $config: JSON!) {
+      createTournament(tournamentId: $tournamentId, config: $config) {
+        ok
+        message
+      }
+    }
+  `;
 
-// 7) Создать турнир.
+  type Resp = { createTournament: MutationAck };
+
+  const wireConfig = mapUiTournamentConfigToWire(params.config);
+
+  const data = await callServiceGraphQL<Resp>(query, {
+    tournamentId: params.tournamentId,
+    config: wireConfig,
+  });
+  return data.createTournament;
+}
+
+async function registerPlayerToTournamentMutation(params: {
+  tournamentId: number;
+  playerId: number;
+  displayName: string;
+}): Promise<MutationAck> {
+  const query = `
+    mutation RegisterPlayerToTournament(
+      $tournamentId: Int!,
+      $playerId: Int!,
+      $displayName: String!
+    ) {
+      registerPlayerToTournament(
+        tournamentId: $tournamentId,
+        playerId: $playerId,
+        displayName: $displayName
+      ) {
+        ok
+        message
+      }
+    }
+  `;
+
+  type Resp = { registerPlayerToTournament: MutationAck };
+
+  const data = await callServiceGraphQL<Resp>(query, params);
+  return data.registerPlayerToTournament;
+}
+
+async function unregisterPlayerFromTournamentMutation(params: {
+  tournamentId: number;
+  playerId: number;
+}): Promise<MutationAck> {
+  const query = `
+    mutation UnregisterPlayerFromTournament(
+      $tournamentId: Int!,
+      $playerId: Int!
+    ) {
+      unregisterPlayerFromTournament(
+        tournamentId: $tournamentId,
+        playerId: $playerId
+      ) {
+        ok
+        message
+      }
+    }
+  `;
+
+  type Resp = { unregisterPlayerFromTournament: MutationAck };
+
+  const data = await callServiceGraphQL<Resp>(query, params);
+  return data.unregisterPlayerFromTournament;
+}
+
+export async function startTournamentMutation(params: {
+  tournamentId: number;
+}): Promise<MutationAck> {
+  const query = `
+    mutation StartTournament($tournamentId: Int!) {
+      startTournament(tournamentId: $tournamentId) {
+        ok
+        message
+      }
+    }
+  `;
+
+  type Resp = { startTournament: MutationAck };
+
+  const data = await callServiceGraphQL<Resp>(query, params);
+  return data.startTournament;
+}
+
+export async function advanceTournamentLevelMutation(params: {
+  tournamentId: number;
+}): Promise<MutationAck> {
+  const query = `
+    mutation AdvanceTournamentLevel($tournamentId: Int!) {
+      advanceTournamentLevel(tournamentId: $tournamentId) {
+        ok
+        message
+      }
+    }
+  `;
+
+  type Resp = { advanceTournamentLevel: MutationAck };
+
+  const data = await callServiceGraphQL<Resp>(query, params);
+  return data.advanceTournamentLevel;
+}
+
+export async function closeTournamentMutation(params: {
+  tournamentId: number;
+}): Promise<MutationAck> {
+  const query = `
+    mutation CloseTournament($tournamentId: Int!) {
+      closeTournament(tournamentId: $tournamentId) {
+        ok
+        message
+      }
+    }
+  `;
+
+  type Resp = { closeTournament: MutationAck };
+
+  const data = await callServiceGraphQL<Resp>(query, params);
+  return data.closeTournament;
+}
+
+// ============================================================================
+//                 LEGACY-ОБЁРТКИ (API как раньше для фронта)
+// ============================================================================
+
 export async function createTournament(
   config: TournamentConfig
 ): Promise<OnChainTournamentViewDto> {
-  const payload: TournamentCommandPayload = {
-    kind: "tournament_command",
-    command_type: "create_tournament",
-    ui_config: config,
-  };
+  const tournamentId = Math.floor(Math.random() * 1_000_000_000);
 
-  return callCommand<OnChainTournamentViewDto>(payload);
+  const ack = await createTournamentMutation({ tournamentId, config });
+  if (!ack.ok) {
+    throw new Error(ack.message || "CreateTournament failed");
+  }
+
+  const view = await fetchTournament(tournamentId);
+  if (!view) {
+    throw new Error("Tournament not found after createTournament");
+  }
+  return view;
 }
 
-// 8) Зарегистрироваться в турнире (по текущему аккаунту / signer).
 export async function registerToTournament(
   tournamentId: number
 ): Promise<OnChainTournamentViewDto> {
-  const payload: TournamentCommandPayload = {
-    kind: "tournament_command",
-    command_type: "register_player",
-    tournament_id: tournamentId,
-  };
+  const ack = await registerPlayerToTournamentMutation({
+    tournamentId,
+    playerId: 1,
+    displayName: "Player #1",
+  });
 
-  return callCommand<OnChainTournamentViewDto>(payload);
+  if (!ack.ok) {
+    throw new Error(ack.message || "RegisterPlayer failed");
+  }
+
+  const view = await fetchTournament(tournamentId);
+  if (!view) {
+    throw new Error("Tournament not found after registerToTournament");
+  }
+  return view;
 }
 
-// 9) Отменить регистрацию.
 export async function unregisterFromTournament(
   tournamentId: number
 ): Promise<OnChainTournamentViewDto> {
-  const payload: TournamentCommandPayload = {
-    kind: "tournament_command",
-    command_type: "unregister_player",
-    tournament_id: tournamentId,
-  };
+  const ack = await unregisterPlayerFromTournamentMutation({
+    tournamentId,
+    playerId: 1,
+  });
 
-  return callCommand<OnChainTournamentViewDto>(payload);
+  if (!ack.ok) {
+    throw new Error(ack.message || "UnregisterPlayer failed");
+  }
+
+  const view = await fetchTournament(tournamentId);
+  if (!view) {
+    throw new Error("Tournament not found after unregisterFromTournament");
+  }
+  return view;
 }
 
-// 10) Запустить турнир.
 export async function startTournament(
   tournamentId: number
 ): Promise<OnChainTournamentViewDto> {
-  const payload: TournamentCommandPayload = {
-    kind: "tournament_command",
-    command_type: "start_tournament",
-    tournament_id: tournamentId,
-  };
+  const ack = await startTournamentMutation({ tournamentId });
+  if (!ack.ok) {
+    throw new Error(ack.message || "StartTournament failed");
+  }
 
-  return callCommand<OnChainTournamentViewDto>(payload);
+  const view = await fetchTournament(tournamentId);
+  if (!view) {
+    throw new Error("Tournament not found after startTournament");
+  }
+  return view;
 }
 
-// 11) Продвинуть уровень блайндов (manual next level).
 export async function advanceTournamentLevel(
   tournamentId: number
 ): Promise<OnChainTournamentViewDto> {
-  const payload: TournamentCommandPayload = {
-    kind: "tournament_command",
-    command_type: "advance_level",
-    tournament_id: tournamentId,
-  };
+  const ack = await advanceTournamentLevelMutation({ tournamentId });
+  if (!ack.ok) {
+    throw new Error(ack.message || "AdvanceTournamentLevel failed");
+  }
 
-  return callCommand<OnChainTournamentViewDto>(payload);
+  const view = await fetchTournament(tournamentId);
+  if (!view) {
+    throw new Error("Tournament not found after advanceTournamentLevel");
+  }
+  return view;
 }
 
-// 12) Закрыть турнир (итоговое завершение).
 export async function closeTournament(
   tournamentId: number
 ): Promise<OnChainTournamentViewDto> {
-  const payload: TournamentCommandPayload = {
-    kind: "tournament_command",
-    command_type: "close_tournament",
-    tournament_id: tournamentId,
-  };
+  const ack = await closeTournamentMutation({ tournamentId });
+  if (!ack.ok) {
+    throw new Error(ack.message || "CloseTournament failed");
+  }
 
-  return callCommand<OnChainTournamentViewDto>(payload);
+  const view = await fetchTournament(tournamentId);
+  if (!view) {
+    throw new Error("Tournament not found after closeTournament");
+  }
+  return view;
 }
 
-// 13) Игровое действие за столом.
 export async function sendPlayerAction(
   tableId: number,
   action: PlayerActionKindUi,
   amount?: number
-): Promise<OnChainTableViewDto> {
-  const payload: PlayerActionCommandPayload & {
-    kind: "table_command";
-  } = {
-    kind: "table_command",
-    table_id: tableId,
-    action,
-    amount,
-  };
+): Promise<OnChainTableViewDto | null> {
+  const ack = await playerAction({ tableId, action, amount });
+  if (!ack.ok) {
+    throw new Error(ack.message || "PlayerAction failed");
+  }
 
-  return callCommand<OnChainTableViewDto>(payload);
+  return fetchTable(tableId);
 }

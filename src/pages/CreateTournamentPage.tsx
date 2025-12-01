@@ -62,7 +62,7 @@ const CreateTournamentPage: React.FC = () => {
 
   const [showAdvanced, setShowAdvanced] = useState(false);
 
-  // UX-состояния
+  // UX
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -90,9 +90,9 @@ const CreateTournamentPage: React.FC = () => {
 
       let ante = 0;
       if (anteType === "ante") {
-        ante = Math.round(bb * 0.125); // 1/8 BB
+        ante = Math.round(bb * 0.125);
       } else if (anteType === "bba") {
-        ante = bb; // Big blind ante
+        ante = bb;
       }
 
       return {
@@ -106,7 +106,6 @@ const CreateTournamentPage: React.FC = () => {
 
   const navigate = useNavigate();
 
-  // Полный конфиг турнира, который отправляем в createTournament(...)
   const config: TournamentConfig = useMemo(
     () => ({
       name,
@@ -180,22 +179,21 @@ const CreateTournamentPage: React.FC = () => {
     [maxPlayers, tableSize]
   );
 
-  const handleCreate = async () => {
+  const handleCreate = async (): Promise<void> => {
     setSubmitError(null);
     setIsSubmitting(true);
 
     try {
       const created: OnChainTournamentViewDto = await createTournament(config);
 
-      // После успешного создания:
-      // 1) можно положить турнир в state, чтобы Lobby сразу его показал;
-      // 2) редирект в Lobby.
       navigate("/lobby", {
         state: { createdTournament: created },
       });
-    } catch (e: any) {
-      console.error("createTournament failed:", e);
-      setSubmitError(e?.message ?? "Failed to create tournament");
+    } catch (error: unknown) {
+      console.error("createTournament failed:", error);
+      const message =
+        error instanceof Error ? error.message : String(error);
+      setSubmitError(message || "Failed to create tournament");
     } finally {
       setIsSubmitting(false);
     }
@@ -248,7 +246,9 @@ const CreateTournamentPage: React.FC = () => {
                   <input
                     className="w-full rounded-lg bg-black/40 border border-white/15 px-3 py-2 text-sm outline-none focus:border-red-500"
                     value={name}
-                    onChange={(e) => setName(e.target.value)}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                      setName(e.target.value)
+                    }
                   />
                 </div>
 
@@ -259,7 +259,9 @@ const CreateTournamentPage: React.FC = () => {
                   <textarea
                     className="w-full rounded-lg bg-black/40 border border-white/15 px-3 py-2 text-sm outline-none focus:border-red-500 resize-none h-16"
                     value={description}
-                    onChange={(e) => setDescription(e.target.value)}
+                    onChange={(
+                      e: React.ChangeEvent<HTMLTextAreaElement>
+                    ) => setDescription(e.target.value)}
                   />
                 </div>
 
@@ -270,7 +272,9 @@ const CreateTournamentPage: React.FC = () => {
                   <textarea
                     className="w-full rounded-lg bg-black/40 border border-white/15 px-3 py-2 text-sm outline-none focus:border-red-500 resize-none h-16"
                     value={prizeDescription}
-                    onChange={(e) => setPrizeDescription(e.target.value)}
+                    onChange={(
+                      e: React.ChangeEvent<HTMLTextAreaElement>
+                    ) => setPrizeDescription(e.target.value)}
                   />
                 </div>
 
@@ -283,7 +287,9 @@ const CreateTournamentPage: React.FC = () => {
                       type="datetime-local"
                       className="w-full rounded-lg bg-black/40 border border-white/15 px-3 py-2 text-xs outline-none focus:border-red-500"
                       value={startTime}
-                      onChange={(e) => setStartTime(e.target.value)}
+                      onChange={(
+                        e: React.ChangeEvent<HTMLInputElement>
+                      ) => setStartTime(e.target.value)}
                     />
                   </div>
                   <div>
@@ -294,7 +300,9 @@ const CreateTournamentPage: React.FC = () => {
                       type="datetime-local"
                       className="w-full rounded-lg bg-black/40 border border-white/15 px-3 py-2 text-xs outline-none focus:border-red-500"
                       value={regCloseTime}
-                      onChange={(e) => setRegCloseTime(e.target.value)}
+                      onChange={(
+                        e: React.ChangeEvent<HTMLInputElement>
+                      ) => setRegCloseTime(e.target.value)}
                     />
                   </div>
                 </div>
@@ -314,7 +322,9 @@ const CreateTournamentPage: React.FC = () => {
                   <select
                     className="w-full rounded-lg bg-black/40 border border-white/15 px-3 py-2 outline-none focus:border-red-500"
                     value={tableSize}
-                    onChange={(e) => setTableSize(Number(e.target.value))}
+                    onChange={(
+                      e: React.ChangeEvent<HTMLSelectElement>
+                    ) => setTableSize(Number(e.target.value))}
                   >
                     <option value={6}>6-max</option>
                     <option value={8}>8-max</option>
@@ -332,7 +342,9 @@ const CreateTournamentPage: React.FC = () => {
                     min={5}
                     max={60}
                     value={actionTime}
-                    onChange={(e) => setActionTime(Number(e.target.value))}
+                    onChange={(
+                      e: React.ChangeEvent<HTMLInputElement>
+                    ) => setActionTime(Number(e.target.value))}
                   />
                 </div>
 
@@ -346,9 +358,9 @@ const CreateTournamentPage: React.FC = () => {
                     min={3}
                     max={30}
                     value={blindLevelDuration}
-                    onChange={(e) =>
-                      setBlindLevelDuration(Number(e.target.value))
-                    }
+                    onChange={(
+                      e: React.ChangeEvent<HTMLInputElement>
+                    ) => setBlindLevelDuration(Number(e.target.value))}
                   />
                 </div>
 
@@ -359,9 +371,9 @@ const CreateTournamentPage: React.FC = () => {
                   <select
                     className="w-full rounded-lg bg-black/40 border border-white/15 px-3 py-2 outline-none focus:border-red-500"
                     value={blindPace}
-                    onChange={(e) =>
-                      setBlindPace(e.target.value as BlindPace)
-                    }
+                    onChange={(
+                      e: React.ChangeEvent<HTMLSelectElement>
+                    ) => setBlindPace(e.target.value as BlindPace)}
                   >
                     <option value="slow">Slow</option>
                     <option value="regular">Regular</option>
@@ -379,9 +391,9 @@ const CreateTournamentPage: React.FC = () => {
                     className="w-full rounded-lg bg-black/40 border border-white/15 px-3 py-2 outline-none focus:border-red-500"
                     min={1000}
                     value={startingStack}
-                    onChange={(e) =>
-                      setStartingStack(Number(e.target.value))
-                    }
+                    onChange={(
+                      e: React.ChangeEvent<HTMLInputElement>
+                    ) => setStartingStack(Number(e.target.value))}
                   />
                 </div>
 
@@ -394,7 +406,9 @@ const CreateTournamentPage: React.FC = () => {
                     className="w-full rounded-lg bg-black/40 border border-white/15 px-3 py-2 outline-none focus:border-red-500"
                     min={2}
                     value={maxPlayers}
-                    onChange={(e) => setMaxPlayers(Number(e.target.value))}
+                    onChange={(
+                      e: React.ChangeEvent<HTMLInputElement>
+                    ) => setMaxPlayers(Number(e.target.value))}
                   />
                 </div>
 
@@ -407,9 +421,9 @@ const CreateTournamentPage: React.FC = () => {
                     className="w-full rounded-lg bg-black/40 border border-white/15 px-3 py-2 outline-none focus:border-red-500"
                     min={0}
                     value={lateRegMinutes}
-                    onChange={(e) =>
-                      setLateRegMinutes(Number(e.target.value))
-                    }
+                    onChange={(
+                      e: React.ChangeEvent<HTMLInputElement>
+                    ) => setLateRegMinutes(Number(e.target.value))}
                   />
                 </div>
               </div>
@@ -428,7 +442,9 @@ const CreateTournamentPage: React.FC = () => {
                   <select
                     className="w-full rounded-lg bg-black/40 border border-white/15 px-3 py-2 outline-none focus:border-red-500"
                     value={anteType}
-                    onChange={(e) => setAnteType(e.target.value as AnteType)}
+                    onChange={(
+                      e: React.ChangeEvent<HTMLSelectElement>
+                    ) => setAnteType(e.target.value as AnteType)}
                   >
                     <option value="none">No Ante</option>
                     <option value="ante">Classic Ante</option>
@@ -458,9 +474,9 @@ const CreateTournamentPage: React.FC = () => {
                   <select
                     className="w-full rounded-lg bg-black/40 border border-white/15 px-3 py-2 outline-none focus:border-red-500"
                     value={payoutType}
-                    onChange={(e) =>
-                      setPayoutType(e.target.value as PayoutType)
-                    }
+                    onChange={(
+                      e: React.ChangeEvent<HTMLSelectElement>
+                    ) => setPayoutType(e.target.value as PayoutType)}
                   >
                     <option value="topHeavy">Top-heavy (winner focus)</option>
                     <option value="flat">Flatter (more paid places)</option>
@@ -479,9 +495,9 @@ const CreateTournamentPage: React.FC = () => {
                     className="w-full rounded-lg bg-black/40 border border-white/15 px-3 py-2 outline-none focus:border-red-500"
                     min={3}
                     value={minPayoutPlaces}
-                    onChange={(e) =>
-                      setMinPayoutPlaces(Number(e.target.value))
-                    }
+                    onChange={(
+                      e: React.ChangeEvent<HTMLInputElement>
+                    ) => setMinPayoutPlaces(Number(e.target.value))}
                   />
                 </div>
 
@@ -494,9 +510,9 @@ const CreateTournamentPage: React.FC = () => {
                     className="w-full rounded-lg bg-black/40 border border-white/15 px-3 py-2 outline-none focus:border-red-500"
                     min={0}
                     value={guaranteedPrizePool}
-                    onChange={(e) =>
-                      setGuaranteedPrizePool(Number(e.target.value))
-                    }
+                    onChange={(
+                      e: React.ChangeEvent<HTMLInputElement>
+                    ) => setGuaranteedPrizePool(Number(e.target.value))}
                   />
                 </div>
 
@@ -517,9 +533,9 @@ const CreateTournamentPage: React.FC = () => {
                       className="w-full rounded-lg bg-black/40 border border-white/15 px-3 py-2 outline-none focus:border-red-500"
                       min={0}
                       value={bountyAmount}
-                      onChange={(e) =>
-                        setBountyAmount(Number(e.target.value))
-                      }
+                      onChange={(
+                        e: React.ChangeEvent<HTMLInputElement>
+                      ) => setBountyAmount(Number(e.target.value))}
                     />
                   </div>
                 )}
@@ -541,9 +557,9 @@ const CreateTournamentPage: React.FC = () => {
                       className="w-full rounded-lg bg-black/40 border border-white/15 px-3 py-2 outline-none focus:border-red-500"
                       min={0}
                       value={finalTableBonus}
-                      onChange={(e) =>
-                        setFinalTableBonus(Number(e.target.value))
-                      }
+                      onChange={(
+                        e: React.ChangeEvent<HTMLInputElement>
+                      ) => setFinalTableBonus(Number(e.target.value))}
                     />
                   </div>
                 )}
@@ -575,9 +591,9 @@ const CreateTournamentPage: React.FC = () => {
                       className="w-full rounded-lg bg-black/40 border border-white/15 px-3 py-2 outline-none focus:border-red-500"
                       min={0}
                       value={timeBankSeconds}
-                      onChange={(e) =>
-                        setTimeBankSeconds(Number(e.target.value))
-                      }
+                      onChange={(
+                        e: React.ChangeEvent<HTMLInputElement>
+                      ) => setTimeBankSeconds(Number(e.target.value))}
                     />
                   </div>
 
@@ -590,9 +606,9 @@ const CreateTournamentPage: React.FC = () => {
                       className="w-full rounded-lg bg-black/40 border border-white/15 px-3 py-2 outline-none focus:border-red-500"
                       min={0}
                       value={breakEveryMinutes}
-                      onChange={(e) =>
-                        setBreakEveryMinutes(Number(e.target.value))
-                      }
+                      onChange={(
+                        e: React.ChangeEvent<HTMLInputElement>
+                      ) => setBreakEveryMinutes(Number(e.target.value))}
                     />
                   </div>
 
@@ -605,9 +621,9 @@ const CreateTournamentPage: React.FC = () => {
                       className="w-full rounded-lg bg-black/40 border border-white/15 px-3 py-2 outline-none focus:border-red-500"
                       min={0}
                       value={breakDurationMinutes}
-                      onChange={(e) =>
-                        setBreakDurationMinutes(Number(e.target.value))
-                      }
+                      onChange={(
+                        e: React.ChangeEvent<HTMLInputElement>
+                      ) => setBreakDurationMinutes(Number(e.target.value))}
                     />
                   </div>
 
@@ -722,8 +738,6 @@ const CreateTournamentPage: React.FC = () => {
   );
 };
 
-/* -------- Toggle компонент -------- */
-
 type ToggleRowProps = {
   label: string;
   description?: string;
@@ -749,7 +763,9 @@ const ToggleRow: React.FC<ToggleRowProps> = ({
         type="checkbox"
         className="sr-only"
         checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
+        onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+          onChange(e.target.checked)
+        }
       />
       <span className="w-11 h-6 bg-black/60 rounded-full border border-red-500/60 flex items-center px-1 transition">
         <span
@@ -759,7 +775,7 @@ const ToggleRow: React.FC<ToggleRowProps> = ({
               ? "translate-x-4 bg-red-500"
               : "translate-x-0 bg-gray-500")
           }
-        ></span>
+        />
       </span>
     </label>
   </div>
