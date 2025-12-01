@@ -1,11 +1,11 @@
 // src/components/CommunityCards.tsx
 
 import React from "react";
-import type { Card as PokerCard } from "../legacy/poker/deck";
+import type { UICard } from "../types/poker";
 import Card from "./Card";
 
 type CommunityCardsProps = {
-  board: PokerCard[];
+  board: UICard[];
 };
 
 const CommunityCards: React.FC<CommunityCardsProps> = ({ board }) => {

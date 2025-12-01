@@ -1,242 +1,268 @@
 // src/pages/TablePage.tsx
 //
-// Реальный ончейн-стол:
-// - читает tableId из location.state (пока так);
-// - грузит TableViewDto через fetchTable;
-// - показывает простой вид стола;
-// - кнопки действий шлют sendPlayerAction и обновляют состояние.
-//
-// Позже можно подвесить сюда OvalTable / PlayerSeat и т.д.
+// Боевой ончейн-стол:
+// - грузит состояние только из Linera (fetchTable → OnChainTableViewDto);
+// - прогоняет через mapTableToUi (мэппер onchain → UI);
+// - рендерит красивый стол через OvalTable;
+// - обрабатывает действия игрока через sendPlayerAction.
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
-import Header from "../components/Header";
-import {
-  fetchTable,
-  sendPlayerAction,
-  type PlayerActionKindUi,
-} from "../linera/lineraClient";
+import { fetchTable, sendPlayerAction } from "../linera/lineraClient";
 import type { OnChainTableViewDto } from "../types/onchain";
+import { mapTableToUi } from "../mappers/onchainToUi";
+import OvalTable from "../components/OvalTable";
 
-interface TablePageLocationState {
+type TableLocationState = {
   tableId?: number;
-  // на будущее — можно прокидывать ещё tournamentId / heroPlayerId и т.п.
-  tournamentId?: number;
-}
+  // на будущее можно добавить heroId, если будешь хранить его на фронте
+};
+
+type PlayerActionKindUi = "fold" | "check_or_call" | "bet" | "raise";
 
 const TablePage: React.FC = () => {
-  const location = useLocation();
   const navigate = useNavigate();
+  const location = useLocation();
+  const state = location.state as TableLocationState | undefined;
 
-  const state = (location.state || {}) as TablePageLocationState;
-  const tableId = state.tableId ?? null;
+  const [tableId, setTableId] = useState<number | null>(state?.tableId ?? null);
+  const [onchainView, setOnchainView] = useState<OnChainTableViewDto | null>(
+    null,
+  );
+  const [uiView, setUiView] =
+    useState<ReturnType<typeof mapTableToUi> | null>(null);
 
-  const [table, setTable] = useState<OnChainTableViewDto | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [actionBusy, setActionBusy] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [commandLoading, setCommandLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function loadTable(id: number) {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const data = await fetchTable(id);
-      setTable(data);
-    } catch (e: any) {
-      console.error("fetchTable failed", e);
-      setError(e?.message ?? "Failed to load table from chain");
-    } finally {
-      setIsLoading(false);
+  const [betAmount, setBetAmount] = useState<string>("");
+
+  // Если вдруг зашли на /table без tableId в state — отправляем на лобби или лендинг.
+  useEffect(() => {
+    if (!tableId) {
+      navigate("/"); // или "/lobby" когда заведёшь лобби-роут
     }
-  }
+  }, [tableId, navigate]);
+
+  const loadTable = useCallback(
+    async (tid: number) => {
+      try {
+        setLoading(true);
+        setError(null);
+
+        const onchain = await fetchTable(tid);
+        setOnchainView(onchain);
+
+        const ui = mapTableToUi(onchain);
+        setUiView(ui);
+      } catch (e: any) {
+        console.error("Failed to load table", e);
+        setError(e?.message ?? "Failed to load table state");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
-    if (tableId == null) {
-      return;
+    if (tableId != null) {
+      loadTable(tableId);
     }
-    loadTable(tableId);
-  }, [tableId]);
+  }, [tableId, loadTable]);
 
-  const handleAction = async (action: PlayerActionKindUi, amount?: number) => {
+  const handleSendAction = async (kind: PlayerActionKindUi) => {
     if (tableId == null) return;
-    setActionBusy(true);
+    if (!uiView) return;
+
+    setCommandLoading(true);
     setError(null);
+
     try {
-      const updated = await sendPlayerAction(tableId, action, amount);
-      setTable(updated);
+      let action: "fold" | "check" | "call" | "bet" | "raise" = "fold";
+      let amount: number | undefined;
+
+      switch (kind) {
+        case "fold":
+          action = "fold";
+          break;
+
+        case "check_or_call":
+          // если currentBet == 0 → check, иначе call
+          action = uiView.currentBet > 0 ? "call" : "check";
+          break;
+
+        case "bet":
+          action = "bet";
+          amount = Number(betAmount) || 0;
+          break;
+
+        case "raise":
+          action = "raise";
+          amount = Number(betAmount) || 0;
+          break;
+      }
+
+      // отправляем команду на ончейн
+      await sendPlayerAction(tableId, action, amount);
+
+      // после успешной команды перезагружаем состояние стола
+      await loadTable(tableId);
     } catch (e: any) {
-      console.error("sendPlayerAction failed", e);
+      console.error("Failed to send action", e);
       setError(e?.message ?? "Failed to send action");
     } finally {
-      setActionBusy(false);
+      setCommandLoading(false);
     }
   };
 
+  if (!tableId) {
+    return null;
+  }
+
+  const isBusy = loading || commandLoading;
+
+  const potLabel = uiView ? uiView.pot.toLocaleString() : "0";
+  const currentBetLabel = uiView
+    ? uiView.currentBet.toLocaleString()
+    : "0";
+
+  const heroId = uiView?.heroId;
+
   return (
-    <div className="min-h-screen flex flex-col bg-slate-950 text-slate-50">
-      <Header />
-
-      <main className="flex-1 flex flex-col items-center justify-center px-4 py-8">
-        <div className="w-full max-w-5xl bg-slate-900/60 border border-slate-800 rounded-3xl shadow-xl p-6">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h1 className="text-2xl font-semibold tracking-tight">
-                Poker Table
-              </h1>
-              <p className="text-sm text-slate-400">
-                Ончейн-стол Linera, стейт идёт из твоего Rust-движка.
-              </p>
-            </div>
-
+    <div className="min-h-screen bg-gradient-to-b from-black via-slate-950 to-black text-white flex flex-col">
+      {/* Хедер / верхняя панель */}
+      <header className="w-full border-b border-white/10 bg-black/60 backdrop-blur-sm">
+        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
             <button
               onClick={() => navigate(-1)}
-              className="px-3 py-1.5 rounded-full border border-slate-700 text-sm text-slate-200 hover:border-slate-400 transition"
+              className="px-2 py-1 text-xs rounded-lg border border-white/20 bg-white/5 hover:bg-white/10 transition"
             >
-              ← Назад
+              ← Back
             </button>
+            <div className="flex flex-col">
+              <span className="text-xs text-gray-400 uppercase tracking-[0.2em]">
+                Linera Poker / Table
+              </span>
+              <span className="text-sm font-semibold">
+                Table #{tableId}
+              </span>
+            </div>
           </div>
 
-          {tableId == null ? (
-            <div className="flex flex-col items-center justify-center h-64 text-slate-400">
-              <p>Нет tableId в state.</p>
-              <p className="text-sm mt-2">
-                Сюда нужно передавать tableId при навигации (например, после
-                startTournament).
-              </p>
+          <div className="flex items-center gap-4 text-xs">
+            <div className="px-3 py-1 rounded-full bg-black/60 border border-white/15">
+              Pot:{" "}
+              <span className="font-semibold">{potLabel}</span>
             </div>
-          ) : isLoading && !table ? (
-            <div className="flex items-center justify-center h-64 text-slate-400">
-              Загружаем состояние стола с блокчейна Linera...
+            <div className="px-3 py-1 rounded-full bg-black/60 border border-white/15">
+              Current bet:{" "}
+              <span className="font-semibold">
+                {currentBetLabel}
+              </span>
             </div>
-          ) : error ? (
-            <div className="flex flex-col items-center justify-center h-64 text-red-300 text-sm">
-              <p>Ошибка: {error}</p>
-              <button
-                onClick={() => loadTable(tableId)}
-                className="mt-4 px-4 py-2 rounded-full border border-red-500 text-red-200 hover:bg-red-500/10 transition"
-              >
-                Повторить
-              </button>
-            </div>
-          ) : !table ? (
-            <div className="flex items-center justify-center h-64 text-slate-400">
-              Нет данных стола.
-            </div>
+            {heroId && (
+              <div className="px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/60 text-emerald-300">
+                You: <span className="font-semibold">{heroId}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </header>
+
+      {/* Основная область: стол + панель действий */}
+      <main className="flex-1 flex flex-col max-w-6xl mx-auto w-full px-4 py-6 gap-4">
+        {/* Статусы загрузки / ошибок */}
+        {(loading || commandLoading) && (
+          <div className="text-xs text-gray-400">
+            {loading ? "Loading table state..." : "Sending action..."}
+          </div>
+        )}
+        {error && (
+          <div className="text-xs text-red-400">
+            {error}
+          </div>
+        )}
+
+        {/* Стол */}
+        <div className="relative w-full flex-1 min-h-[420px] md:min-h-[520px]">
+          {uiView ? (
+            <OvalTable
+              players={uiView.players}
+              communityCards={uiView.communityCards}
+              pot={uiView.pot}
+              currentBet={uiView.currentBet}
+              street={uiView.street}
+              heroId={uiView.heroId}
+            />
           ) : (
-            <div className="space-y-6">
-              {/* Инфо по столу */}
-              <section className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                <div>
-                  <h2 className="text-xl font-semibold">
-                    {table.name} (ID {table.table_id})
-                  </h2>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Blinds {table.small_blind}/{table.big_blind}, ante{" "}
-                    {table.ante}. Street: {table.street}. Pot:{" "}
-                    {table.total_pot}.
-                  </p>
-                </div>
-                <div className="text-xs text-slate-400">
-                  <div>Max seats: {table.max_seats}</div>
-                  <div>
-                    Dealer button:{" "}
-                    {table.dealer_button != null
-                      ? table.dealer_button
-                      : "—"}
-                  </div>
-                  <div>
-                    Hand in progress: {table.hand_in_progress ? "Yes" : "No"}
-                  </div>
-                </div>
-              </section>
-
-              {/* Борд */}
-              <section className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4">
-                <h3 className="text-sm font-semibold mb-2">Board</h3>
-                {table.board.length === 0 ? (
-                  <p className="text-xs text-slate-500">Board is empty yet.</p>
-                ) : (
-                  <div className="flex gap-2">
-                    {table.board.map((card, idx) => (
-                      <div
-                        key={idx}
-                        className="w-10 h-14 rounded-lg bg-slate-800 border border-slate-600 flex items-center justify-center text-sm"
-                      >
-                        {card.rank}
-                        {card.suit}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </section>
-
-              {/* Игроки */}
-              <section className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4">
-                <h3 className="text-sm font-semibold mb-3">Players</h3>
-                {table.players.length === 0 ? (
-                  <p className="text-xs text-slate-500">
-                    No players at the table.
-                  </p>
-                ) : (
-                  <div className="space-y-2 text-xs">
-                    {table.players.map((p) => {
-                      const isActor =
-                        table.current_actor_seat != null &&
-                        table.current_actor_seat === p.seat_index;
-                      return (
-                        <div
-                          key={p.player_id}
-                          className={
-                            "flex items-center justify-between rounded-xl px-3 py-2 border " +
-                            (isActor
-                              ? "border-emerald-400 bg-emerald-500/10"
-                              : "border-slate-700 bg-slate-900")
-                          }
-                        >
-                          <div className="flex flex-col">
-                            <span className="font-semibold text-slate-100">
-                              {p.display_name} (#{p.player_id})
-                            </span>
-                            <span className="text-slate-400">
-                              Seat {p.seat_index} · {p.status}
-                            </span>
-                          </div>
-                          <div className="text-right">
-                            <div>Stack: {p.stack}</div>
-                            <div>Bet: {p.current_bet}</div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </section>
-
-              {/* Кнопки действий (пока простые) */}
-              <section className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4">
-                <h3 className="text-sm font-semibold mb-3">
-                  Player actions (demo)
-                </h3>
-                <div className="flex flex-wrap gap-2">
-                  {(["fold", "check", "call"] as PlayerActionKindUi[]).map(
-                    (a) => (
-                      <button
-                        key={a}
-                        disabled={actionBusy}
-                        onClick={() => handleAction(a)}
-                        className="px-4 py-2 rounded-full bg-slate-800 hover:bg-slate-700 text-xs uppercase tracking-wide disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {a}
-                      </button>
-                    )
-                  )}
-                  {/* Для bet/raise понадобится amount – это сделаем отдельным шагом */}
-                </div>
-              </section>
+            <div className="w-full h-full flex items-center justify-center text-sm text-gray-500">
+              No table data yet
             </div>
           )}
         </div>
+
+        {/* Панель действий игрока */}
+        <section className="mt-4 border-t border-white/10 pt-4">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                disabled={isBusy}
+                onClick={() => handleSendAction("fold")}
+                className="px-4 py-2 rounded-xl border border-red-500/60 bg-red-500/10 text-sm hover:bg-red-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition"
+              >
+                Fold
+              </button>
+
+              <button
+                disabled={isBusy}
+                onClick={() => handleSendAction("check_or_call")}
+                className="px-4 py-2 rounded-xl border border-slate-500/60 bg-slate-500/10 text-sm hover:bg-slate-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition"
+              >
+                {uiView && uiView.currentBet > 0 ? "Call" : "Check"}
+              </button>
+
+              <button
+                disabled={isBusy || !betAmount}
+                onClick={() => handleSendAction("bet")}
+                className="px-4 py-2 rounded-xl border border-emerald-500/60 bg-emerald-500/10 text-sm hover:bg-emerald-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition"
+              >
+                Bet
+              </button>
+
+              <button
+                disabled={isBusy || !betAmount}
+                onClick={() => handleSendAction("raise")}
+                className="px-4 py-2 rounded-xl border border-amber-500/60 bg-amber-500/10 text-sm hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition"
+              >
+                Raise
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2 text-xs text-gray-300">
+              <span>Amount</span>
+              <input
+                type="number"
+                min={0}
+                step={1}
+                value={betAmount}
+                onChange={(e) => setBetAmount(e.target.value)}
+                className="w-28 px-3 py-1.5 rounded-lg bg-black/70 border border-white/15 text-sm outline-none focus:border-red-400"
+                placeholder="Size"
+              />
+              <button
+                disabled={isBusy}
+                onClick={() => tableId && loadTable(tableId)}
+                className="px-3 py-1.5 rounded-lg border border-white/20 bg-white/5 hover:bg-white/10 text-xs disabled:opacity-50 disabled:cursor-not-allowed transition"
+              >
+                Refresh
+              </button>
+            </div>
+          </div>
+        </section>
       </main>
     </div>
   );
