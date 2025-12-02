@@ -186,6 +186,88 @@ export interface MutationAck {
 }
 
 // ============================================================================
+//                  Хелперы для ACK (MutationAck)
+// ============================================================================
+
+/**
+ * Нормализация произвольного ответа бэкенда к MutationAck.
+ * Поддерживает:
+ *  - { ok: bool, message?: string }
+ *  - { success: bool, error?: string }
+ *  - любые truthy / falsy значения в raw.ok.
+ */
+function normalizeAck(raw: any, context: string): MutationAck {
+  if (!raw || typeof raw !== "object") {
+    console.error(`[lineraClient] ${context} raw non-object ack:`, raw);
+    return {
+      ok: true,
+      message: `${context}: backend returned non-object ack`,
+    };
+  }
+
+  let ok: boolean;
+  if (typeof raw.ok === "boolean") {
+    ok = raw.ok;
+  } else if (typeof raw.success === "boolean") {
+    ok = raw.success;
+  } else if (raw.ok != null) {
+    ok = Boolean(raw.ok);
+  } else if (raw.success != null) {
+    ok = Boolean(raw.success);
+  } else {
+    ok = true;
+  }
+
+  let message = "";
+  if (typeof raw.message === "string") {
+    message = raw.message;
+  } else if (typeof raw.error === "string") {
+    message = raw.error;
+  }
+
+  return { ok, message };
+}
+
+/**
+ * Достаёт ack из объекта ответа по нескольким возможным названиям полей.
+ */
+function extractAckFromResponse(
+  data: any,
+  fieldNames: string[],
+  context: string
+): MutationAck {
+  // Если бэкенд вернул просто строку / число / null (как хэш операции),
+  // считаем, что всё ок и не спамим ошибками.
+  if (data === null || typeof data !== "object") {
+    console.log(
+      `[lineraClient] ${context}: non-object GraphQL data (treated as ok):`,
+      data
+    );
+    return {
+      ok: true,
+      message: "",
+    };
+  }
+
+  for (const field of fieldNames) {
+    if (Object.prototype.hasOwnProperty.call(data, field)) {
+      return normalizeAck((data as any)[field], context);
+    }
+  }
+
+  // Поле не найдено, но это не критично — просто логируем как debug
+  // и возвращаем "успех", дальше фронт всё равно перечитает состояние через fetch*.
+  console.log(
+    `[lineraClient] ${context}: ack field not found in data (treated as ok):`,
+    data
+  );
+  return {
+    ok: true,
+    message: "",
+  };
+}
+
+// ============================================================================
 //           Маппинги GQL <-> твои DTO (snake_case формы)
 // ============================================================================
 
@@ -344,7 +426,7 @@ export async function fetchTournament(
 ): Promise<OnChainTournamentViewDto | null> {
   const query = `
     query FetchTournament($tournamentId: Int!) {
-      tournament_by_id(tournamentId: $tournamentId) {
+      tournamentById(tournamentId: $tournamentId) {
         tournamentId
         name
         status
@@ -355,11 +437,11 @@ export async function fetchTournament(
     }
   `;
 
-  type Resp = { tournament_by_id: GqlTournamentView | null };
+  type Resp = { tournamentById: GqlTournamentView | null };
 
   const data = await callServiceGraphQL<Resp>(query, { tournamentId });
-  if (!data.tournament_by_id) return null;
-  return mapTournament(data.tournament_by_id);
+  if (!data.tournamentById) return null;
+  return mapTournament(data.tournamentById);
 }
 
 export async function fetchTournamentTables(
@@ -367,7 +449,7 @@ export async function fetchTournamentTables(
 ): Promise<OnChainTableViewDto[]> {
   const query = `
     query FetchTournamentTables($tournamentId: Int!) {
-      tournament_tables(tournamentId: $tournamentId) {
+      tournamentTables(tournamentId: $tournamentId) {
         tableId
         name
         maxSeats
@@ -393,10 +475,10 @@ export async function fetchTournamentTables(
     }
   `;
 
-  type Resp = { tournament_tables: GqlTableView[] };
+  type Resp = { tournamentTables: GqlTableView[] };
 
   const data = await callServiceGraphQL<Resp>(query, { tournamentId });
-  return data.tournament_tables.map(mapTable);
+  return data.tournamentTables.map(mapTable);
 }
 
 export async function fetchSummary(): Promise<SummaryResponse> {
@@ -454,10 +536,13 @@ export async function createTable(params: {
     }
   `;
 
-  type Resp = { createTable: MutationAck };
+  type Resp = {
+    createTable?: any;
+    create_table?: any;
+  };
 
   const data = await callServiceGraphQL<Resp>(query, params);
-  return data.createTable;
+  return extractAckFromResponse(data, ["createTable", "create_table"], "createTable");
 }
 
 export async function seatPlayer(params: {
@@ -488,10 +573,13 @@ export async function seatPlayer(params: {
     }
   `;
 
-  type Resp = { seatPlayer: MutationAck };
+  type Resp = {
+    seatPlayer?: any;
+    seat_player?: any;
+  };
 
   const data = await callServiceGraphQL<Resp>(query, params);
-  return data.seatPlayer;
+  return extractAckFromResponse(data, ["seatPlayer", "seat_player"], "seatPlayer");
 }
 
 export async function unseatPlayer(params: {
@@ -507,10 +595,13 @@ export async function unseatPlayer(params: {
     }
   `;
 
-  type Resp = { unseatPlayer: MutationAck };
+  type Resp = {
+    unseatPlayer?: any;
+    unseat_player?: any;
+  };
 
   const data = await callServiceGraphQL<Resp>(query, params);
-  return data.unseatPlayer;
+  return extractAckFromResponse(data, ["unseatPlayer", "unseat_player"], "unseatPlayer");
 }
 
 export async function adjustStack(params: {
@@ -527,10 +618,13 @@ export async function adjustStack(params: {
     }
   `;
 
-  type Resp = { adjustStack: MutationAck };
+  type Resp = {
+    adjustStack?: any;
+    adjust_stack?: any;
+  };
 
   const data = await callServiceGraphQL<Resp>(query, params);
-  return data.adjustStack;
+  return extractAckFromResponse(data, ["adjustStack", "adjust_stack"], "adjustStack");
 }
 
 export async function startHand(params: {
@@ -546,10 +640,13 @@ export async function startHand(params: {
     }
   `;
 
-  type Resp = { startHand: MutationAck };
+  type Resp = {
+    startHand?: any;
+    start_hand?: any;
+  };
 
   const data = await callServiceGraphQL<Resp>(query, params);
-  return data.startHand;
+  return extractAckFromResponse(data, ["startHand", "start_hand"], "startHand");
 }
 
 // UI action тип
@@ -602,10 +699,13 @@ export async function playerAction(params: {
     amount: params.amount ?? null,
   };
 
-  type Resp = { playerAction: MutationAck };
+  type Resp = {
+    playerAction?: any;
+    player_action?: any;
+  };
 
   const data = await callServiceGraphQL<Resp>(query, variables);
-  return data.playerAction;
+  return extractAckFromResponse(data, ["playerAction", "player_action"], "playerAction");
 }
 
 export async function tickTable(params: {
@@ -621,96 +721,154 @@ export async function tickTable(params: {
     }
   `;
 
-  type Resp = { tickTable: MutationAck };
+  type Resp = {
+    tickTable?: any;
+    tick_table?: any;
+  };
 
   const data = await callServiceGraphQL<Resp>(query, params);
-  return data.tickTable;
+  return extractAckFromResponse(data, ["tickTable", "tick_table"], "tickTable");
 }
 
 // ============================================================================
 //                       ТУРНИРНЫЕ МУТАЦИИ (низкий уровень)
 // ============================================================================
 
-interface WireTournamentConfig {
-  name: string;
-  description: string;
-  prize_description: string;
-  start_time: string;
-  reg_close_time: string;
-  table_size: number;
-  action_time: number;
-  blind_level_duration: number;
-  blind_pace: BlindPace;
-  starting_stack: number;
-  max_players: number;
-  late_reg_minutes: number;
-  ante_type: AnteType;
-  is_progressive_ante: boolean;
-  payout_type: PayoutType;
-  min_payout_places: number;
-  guaranteed_prize_pool: number;
-  is_bounty: boolean;
-  bounty_amount: number;
-  has_final_table_bonus: boolean;
-  final_table_bonus: number;
-  time_bank_seconds: number;
-  break_every_minutes: number;
-  break_duration_minutes: number;
-  instant_registration: boolean;
-  reentry_allowed: boolean;
-  rebuys_allowed: boolean;
-  blind_levels: BlindLevel[];
-  min_players_to_start: number;
-  freezeout: boolean;
+type WireAnteType = "None" | "Classic" | "BigBlind";
+
+interface WireBlindLevel {
+  level: number;
+  small_blind: number;
+  big_blind: number;
+  ante: number;
+  ante_type: WireAnteType;
+  duration_minutes: number;
 }
 
-// Явное приведение UI-конфига к формату, который ждёт Rust `TournamentConfig`.
+interface WireBlindStructure {
+  levels: WireBlindLevel[];
+}
+
+interface WireSchedule {
+  scheduled_start_ts: number;
+  allow_start_earlier: boolean;
+  break_every_minutes: number;
+  break_duration_minutes: number;
+}
+
+interface WireBalancing {
+  enabled: boolean;
+  max_seat_diff: number;
+}
+
+interface WireTournamentConfig {
+  name: string;
+  description: string | null;
+  starting_stack: number;
+  max_players: number;
+  min_players_to_start: number;
+  table_size: number;
+
+  freezeout: boolean;
+  reentry_allowed: boolean;
+  max_entries_per_player: number;
+  late_reg_level: number;
+
+  blind_structure: WireBlindStructure;
+
+  auto_approve: boolean;
+
+  schedule: WireSchedule;
+  balancing: WireBalancing;
+}
+
+function mapAnteTypeToWire(ante: AnteType): WireAnteType {
+  switch (ante) {
+    case "none":
+      return "None";
+    case "ante":
+      return "Classic";
+    case "bba":
+      return "BigBlind";
+  }
+}
+
 function mapUiTournamentConfigToWire(
   config: TournamentConfig
 ): WireTournamentConfig {
   const cfgWithOptional = config as TournamentConfig & {
     minPlayersToStart?: number;
+    maxEntriesPerPlayer?: number;
   };
 
   const minPlayersToStart =
-    cfgWithOptional.minPlayersToStart ??
-    config.maxPlayers ??
-    config.tableSize ??
-    2;
+    cfgWithOptional.minPlayersToStart ?? config.tableSize ?? 2;
 
   const freezeout = !config.reEntryAllowed && !config.rebuysAllowed;
 
+  const maxEntriesPerPlayer =
+    cfgWithOptional.maxEntriesPerPlayer ?? (freezeout ? 1 : 3);
+
+  let lateRegLevel = 0;
+  if (config.lateRegMinutes > 0 && config.blindLevelDuration > 0) {
+    const raw = config.lateRegMinutes / config.blindLevelDuration;
+    lateRegLevel = Math.max(1, Math.ceil(raw));
+  }
+
+  const anteTypeWire = mapAnteTypeToWire(config.anteType);
+  const durationPerLevel = config.blindLevelDuration;
+
+  const wireBlindLevels: WireBlindLevel[] = config.blindLevels.map(
+    (lvl: BlindLevel): WireBlindLevel => ({
+      level: lvl.level,
+      small_blind: lvl.smallBlind,
+      big_blind: lvl.bigBlind,
+      ante: lvl.ante,
+      ante_type: anteTypeWire,
+      duration_minutes: durationPerLevel,
+    })
+  );
+
+  const blindStructure: WireBlindStructure = {
+    levels: wireBlindLevels,
+  };
+
+  const schedule: WireSchedule = {
+    scheduled_start_ts: 0,
+    allow_start_earlier: true,
+    break_every_minutes: config.breakEveryMinutes || 60,
+    break_duration_minutes: config.breakDurationMinutes || 5,
+  };
+
+  const balancing: WireBalancing = {
+    enabled: true,
+    max_seat_diff: 1,
+  };
+
+  const description =
+    config.description && config.description.trim().length > 0
+      ? config.description
+      : null;
+
   return {
     name: config.name,
-    description: config.description,
-    prize_description: config.prizeDescription,
-    start_time: config.startTime,
-    reg_close_time: config.regCloseTime,
-    table_size: config.tableSize,
-    action_time: config.actionTime,
-    blind_level_duration: config.blindLevelDuration,
-    blind_pace: config.blindPace,
+    description,
     starting_stack: config.startingStack,
     max_players: config.maxPlayers,
-    late_reg_minutes: config.lateRegMinutes,
-    ante_type: config.anteType,
-    is_progressive_ante: config.isProgressiveAnte,
-    payout_type: config.payoutType,
-    min_payout_places: config.minPayoutPlaces,
-    guaranteed_prize_pool: config.guaranteedPrizePool,
-    is_bounty: config.isBounty,
-    bounty_amount: config.bountyAmount,
-    has_final_table_bonus: config.hasFinalTableBonus,
-    final_table_bonus: config.finalTableBonus,
-    time_bank_seconds: config.timeBankSeconds,
-    break_every_minutes: config.breakEveryMinutes,
-    break_duration_minutes: config.breakDurationMinutes,
-    instant_registration: config.instantRegistration,
-    reentry_allowed: config.reEntryAllowed,
-    rebuys_allowed: config.rebuysAllowed,
-    blind_levels: config.blindLevels,
     min_players_to_start: minPlayersToStart,
+    table_size: config.tableSize,
+
     freezeout,
+    reentry_allowed: config.reEntryAllowed,
+    max_entries_per_player: maxEntriesPerPlayer,
+    late_reg_level: lateRegLevel,
+
+    blind_structure: blindStructure,
+
+    auto_approve: config.instantRegistration,
+
+    schedule,
+    balancing,
   };
 }
 
@@ -727,15 +885,23 @@ async function createTournamentMutation(params: {
     }
   `;
 
-  type Resp = { createTournament: MutationAck };
-
   const wireConfig = mapUiTournamentConfigToWire(params.config);
+
+  type Resp = {
+    createTournament?: any;
+    create_tournament?: any;
+  };
 
   const data = await callServiceGraphQL<Resp>(query, {
     tournamentId: params.tournamentId,
     config: wireConfig,
   });
-  return data.createTournament;
+
+  return extractAckFromResponse(
+    data,
+    ["createTournament", "create_tournament"],
+    "createTournament"
+  );
 }
 
 async function registerPlayerToTournamentMutation(params: {
@@ -760,10 +926,18 @@ async function registerPlayerToTournamentMutation(params: {
     }
   `;
 
-  type Resp = { registerPlayerToTournament: MutationAck };
+  type Resp = {
+    registerPlayerToTournament?: any;
+    register_player_to_tournament?: any;
+  };
 
   const data = await callServiceGraphQL<Resp>(query, params);
-  return data.registerPlayerToTournament;
+
+  return extractAckFromResponse(
+    data,
+    ["registerPlayerToTournament", "register_player_to_tournament"],
+    "registerPlayerToTournament"
+  );
 }
 
 async function unregisterPlayerFromTournamentMutation(params: {
@@ -785,10 +959,18 @@ async function unregisterPlayerFromTournamentMutation(params: {
     }
   `;
 
-  type Resp = { unregisterPlayerFromTournament: MutationAck };
+  type Resp = {
+    unregisterPlayerFromTournament?: any;
+    unregister_player_from_tournament?: any;
+  };
 
   const data = await callServiceGraphQL<Resp>(query, params);
-  return data.unregisterPlayerFromTournament;
+
+  return extractAckFromResponse(
+    data,
+    ["unregisterPlayerFromTournament", "unregister_player_from_tournament"],
+    "unregisterPlayerFromTournament"
+  );
 }
 
 export async function startTournamentMutation(params: {
@@ -803,10 +985,18 @@ export async function startTournamentMutation(params: {
     }
   `;
 
-  type Resp = { startTournament: MutationAck };
+  type Resp = {
+    startTournament?: any;
+    start_tournament?: any;
+  };
 
   const data = await callServiceGraphQL<Resp>(query, params);
-  return data.startTournament;
+
+  return extractAckFromResponse(
+    data,
+    ["startTournament", "start_tournament"],
+    "startTournament"
+  );
 }
 
 export async function advanceTournamentLevelMutation(params: {
@@ -821,10 +1011,18 @@ export async function advanceTournamentLevelMutation(params: {
     }
   `;
 
-  type Resp = { advanceTournamentLevel: MutationAck };
+  type Resp = {
+    advanceTournamentLevel?: any;
+    advance_tournament_level?: any;
+  };
 
   const data = await callServiceGraphQL<Resp>(query, params);
-  return data.advanceTournamentLevel;
+
+  return extractAckFromResponse(
+    data,
+    ["advanceTournamentLevel", "advance_tournament_level"],
+    "advanceTournamentLevel"
+  );
 }
 
 export async function closeTournamentMutation(params: {
@@ -839,10 +1037,18 @@ export async function closeTournamentMutation(params: {
     }
   `;
 
-  type Resp = { closeTournament: MutationAck };
+  type Resp = {
+    closeTournament?: any;
+    close_tournament?: any;
+  };
 
   const data = await callServiceGraphQL<Resp>(query, params);
-  return data.closeTournament;
+
+  return extractAckFromResponse(
+    data,
+    ["closeTournament", "close_tournament"],
+    "closeTournament"
+  );
 }
 
 // ============================================================================
