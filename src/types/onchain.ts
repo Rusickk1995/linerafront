@@ -29,7 +29,7 @@ export interface OnChainPlayerAtTableDto {
 
 /// Стол (TableViewDto из poker_engine::api::dto).
 export interface OnChainTableViewDto {
-  table_id: number;
+  table_id: string;
   name: string;
   max_seats: number;
   small_blind: number;

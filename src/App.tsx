@@ -4,20 +4,29 @@ import React from "react";
 import { Routes, Route } from "react-router-dom";
 import LandingPage from "./pages/LandingPage";
 import CreateTournamentPage from "./pages/CreateTournamentPage";
+import Lobby from "./pages/Lobby";
+import TournamentPage from "./pages/TournamentPage";
 import TablePage from "./pages/TablePage";
-import Lobby from "./pages/Lobby"; // ← ДОБАВЛЯЕМ
 
 const App: React.FC = () => {
   return (
     <Routes>
+      {/* Лендинг */}
       <Route path="/" element={<LandingPage />} />
-      <Route path="/create" element={<CreateTournamentPage />} />
-      <Route path="/table" element={<TablePage />} />
 
-      {/* НОВЫЙ маршрут для /lobby */}
+      {/* Создание турнира */}
+      <Route path="/create" element={<CreateTournamentPage />} />
+
+      {/* Лобби турниров */}
       <Route path="/lobby" element={<Lobby />} />
 
-      {/* опционально, чтобы на левом URL не было чёрного экрана */}
+      {/* Страница одного турнира */}
+      <Route path="/tournaments/:id" element={<TournamentPage />} />
+
+      {/* Страница стола. tableId берём из URL-параметра */}
+      <Route path="/tables/:tableId" element={<TablePage />} />
+
+      {/* опциональный fallback, если нужен */}
       {/* <Route path="*" element={<LandingPage />} /> */}
     </Routes>
   );

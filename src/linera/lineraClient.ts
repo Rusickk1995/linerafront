@@ -2,9 +2,12 @@
 //
 // Клиент для Linera Poker (GraphQL service.rs).
 //
-// Все операции (READ + WRITE) идут через GraphQL endpoint:
+// Все операции (READ + WRITE) идут через GraphQL, но
+// НЕ по HTTP, а через Linera Web client (@linera/client)
+// напрямую в публичный Linera Testnet.
 //
-//   VITE_LINERA_SERVICE_URL = "http://localhost:8081/chains/<CHAIN_ID>/applications/<APP_ID>"
+//   VITE_LINERA_APP_ID       = "<APP_ID твоего poker-приложения в Testnet>"
+//   VITE_LINERA_FAUCET_URL   = "https://faucet.testnet-conway.linera.net"
 //
 // service.rs внутри сам вызывает schedule_operation(&Operation::Command(...)).
 
@@ -17,101 +20,128 @@ import type {
 import type {
   AnteType,
   BlindLevel,
-  BlindPace,
-  PayoutType,
   TournamentConfig,
 } from "../types/poker";
 
+import initLinera, {
+  Application,
+  Client,
+  Faucet,
+  Wallet,
+} from "@linera/client";
+
 // ============================================================================
-//                   ENV и базовые сетевые хелперы
+//                   ENV и инициализация Linera Web client
 // ============================================================================
 
-const SERVICE_URL =
-  (import.meta as any).env.VITE_LINERA_SERVICE_URL as string | undefined;
+// APP_ID и FAUCET_URL берём из окружения Vite/Vercel.
+const APP_ID =
+  (import.meta as any).env.VITE_LINERA_APP_ID as string | undefined;
 
+const FAUCET_URL =
+  ((import.meta as any).env.VITE_LINERA_FAUCET_URL as string | undefined) ??
+  "https://faucet.testnet-conway.linera.net";
+
+// Если не хватает env — сразу падаем с понятной ошибкой
 function requireEnv(name: string, value: string | undefined): string {
   if (!value) {
     throw new Error(
-      `Missing env variable ${name}. Configure import.meta.env.${name} (e.g. in .env.local).`
+      `Missing env variable ${name}. Configure import.meta.env.${name} (e.g. in .env.local / Vercel env).`
     );
   }
   return value;
 }
 
-async function postJson<TResponse>(
-  url: string,
-  body: unknown
-): Promise<TResponse> {
-  let res: Response;
+// ============================
+// Инициализация WASM + backend
+// ============================
 
-  try {
-    res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-  } catch (networkError: unknown) {
-    console.error("[lineraClient] Network error", {
-      url,
-      body,
-      error: networkError,
-    });
+let wasmInitPromise: Promise<unknown> | null = null;
+let backendPromise: Promise<Application> | null = null;
 
-    const message =
-      networkError instanceof Error
-        ? networkError.message
-        : String(networkError);
-
-    throw new Error(
-      `Network error while calling Linera endpoint ${url}: ${message}`
-    );
+async function ensureWasmInitialized(): Promise<void> {
+  if (!wasmInitPromise) {
+    // default export — инициализация WASM-рантайма Linera в браузере
+    wasmInitPromise = initLinera();
   }
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    console.error("[lineraClient] HTTP error", {
-      url,
-      body,
-      status: res.status,
-      statusText: res.statusText,
-      text,
-    });
-    throw new Error(
-      `Linera HTTP error ${res.status}: ${res.statusText}\n${text}`.trim()
-    );
-  }
-
-  const json = (await res.json()) as TResponse;
-  return json;
+  await wasmInitPromise;
 }
+
+async function createBackend(): Promise<Application> {
+  await ensureWasmInitialized();
+
+  const appId = requireEnv("VITE_LINERA_APP_ID", APP_ID);
+  const faucetUrl = requireEnv("VITE_LINERA_FAUCET_URL", FAUCET_URL);
+
+  // 1) Faucet (Testnet Conway)
+  const faucet = await new Faucet(faucetUrl);
+
+  // 2) Создаем временный кошелек через faucet
+  const wallet: Wallet = await faucet.createWallet();
+
+  // 3) Клиент поверх кошелька
+  const client = await new Client(wallet);
+
+  // 4) Claim цепь у faucet (чтобы было что-то своё)
+  await faucet.claimChain(client);
+
+  // 5) Берём frontend твоего приложения по APP_ID
+  const frontend = client.frontend();
+  const application = await frontend.application(appId);
+
+  return application;
+}
+
+async function getBackend(): Promise<Application> {
+  if (!backendPromise) {
+    backendPromise = createBackend();
+  }
+  return backendPromise;
+}
+
+// ============================================================================
+//      GraphQL-обёртка через backend.query(JSON.stringify({ query, variables }))
+// ============================================================================
 
 interface GraphQLResponse<TData> {
   data?: TData;
   errors?: { message: string }[];
 }
 
-async function callServiceGraphQL<TData>(
+/**
+ * Главная точка входа: отправка GraphQL-запроса в твой Poker service
+ * через Linera Web client (без локального HTTP GraphQL).
+ */
+export async function callServiceGraphQL<TData>(
   query: string,
   variables?: Record<string, unknown>
 ): Promise<TData> {
-  const url = requireEnv("VITE_LINERA_SERVICE_URL", SERVICE_URL);
+  const backend = await getBackend();
 
   const payload = { query, variables };
-  const resp = await postJson<GraphQLResponse<TData>>(url, payload);
 
-  if (resp.errors && resp.errors.length > 0) {
-    console.error("[lineraClient] GraphQL errors", resp.errors);
-    const msg = resp.errors.map((e) => e.message).join("; ");
+  // service.rs ожидает JSON формата { query, variables } как строку
+  const raw = await backend.query(JSON.stringify(payload));
+
+  let parsed: GraphQLResponse<TData>;
+  try {
+    parsed = JSON.parse(raw) as GraphQLResponse<TData>;
+  } catch (e) {
+    console.error("[lineraClient] Failed to parse GraphQL response", raw);
+    throw new Error("Invalid JSON from backend.query()");
+  }
+
+  if (parsed.errors && parsed.errors.length > 0) {
+    const msg = parsed.errors.map((er) => er.message).join("; ");
+    console.error("[lineraClient] GraphQL errors", parsed.errors);
     throw new Error(`Linera GraphQL error: ${msg}`);
   }
 
-  if (!resp.data) {
+  if (!parsed.data) {
     throw new Error("Linera GraphQL error: missing `data` in response");
   }
 
-  return resp.data;
+  return parsed.data;
 }
 
 // ============================================================================
@@ -133,6 +163,8 @@ interface GqlCard {
   suit: string;
 }
 
+// ВАЖНО: в service.rs GqlPlayerAtTable.player_id: i64,
+// но async-graphql в JSON отдаёт number, всё ок.
 interface GqlPlayerAtTable {
   playerId: number;
   displayName: string;
@@ -143,8 +175,10 @@ interface GqlPlayerAtTable {
   holeCards?: GqlCard[] | null;
 }
 
+// ВАЖНО: в service.rs GqlTableView.table_id: String,
+// значит здесь `tableId: string`, а не number.
 interface GqlTableView {
-  tableId: number;
+  tableId: string;
   name: string;
   maxSeats: number;
   smallBlind: number;
@@ -289,7 +323,7 @@ function mapPlayer(g: GqlPlayerAtTable): OnChainPlayerAtTableDto {
 
 function mapTable(g: GqlTableView): OnChainTableViewDto {
   return {
-    table_id: g.tableId,
+    table_id: Number(g.tableId), // из String в number для твоего DTO
     name: g.name,
     max_seats: g.maxSeats,
     small_blind: g.smallBlind,
@@ -332,7 +366,7 @@ export async function fetchTable(
   tableId: number
 ): Promise<OnChainTableViewDto | null> {
   const query = `
-    query FetchTable($tableId: Int!) {
+    query FetchTable($tableId: String!) {
       table(tableId: $tableId) {
         tableId
         name
@@ -361,7 +395,9 @@ export async function fetchTable(
 
   type Resp = { table: GqlTableView | null };
 
-  const data = await callServiceGraphQL<Resp>(query, { tableId });
+  const data = await callServiceGraphQL<Resp>(query, {
+    tableId: String(tableId),
+  });
   if (!data.table) return null;
   return mapTable(data.table);
 }
@@ -513,7 +549,7 @@ export async function createTable(params: {
 }): Promise<MutationAck> {
   const query = `
     mutation CreateTable(
-      $tableId: Int!,
+      $tableId: String!,
       $name: String!,
       $maxSeats: Int!,
       $smallBlind: Int!,
@@ -541,8 +577,17 @@ export async function createTable(params: {
     create_table?: any;
   };
 
-  const data = await callServiceGraphQL<Resp>(query, params);
-  return extractAckFromResponse(data, ["createTable", "create_table"], "createTable");
+  const variables = {
+    ...params,
+    tableId: String(params.tableId),
+  };
+
+  const data = await callServiceGraphQL<Resp>(query, variables);
+  return extractAckFromResponse(
+    data,
+    ["createTable", "create_table"],
+    "createTable"
+  );
 }
 
 export async function seatPlayer(params: {
@@ -554,7 +599,7 @@ export async function seatPlayer(params: {
 }): Promise<MutationAck> {
   const query = `
     mutation SeatPlayer(
-      $tableId: Int!,
+      $tableId: String!,
       $playerId: Int!,
       $seatIndex: Int!,
       $displayName: String!,
@@ -578,8 +623,17 @@ export async function seatPlayer(params: {
     seat_player?: any;
   };
 
-  const data = await callServiceGraphQL<Resp>(query, params);
-  return extractAckFromResponse(data, ["seatPlayer", "seat_player"], "seatPlayer");
+  const variables = {
+    ...params,
+    tableId: String(params.tableId),
+  };
+
+  const data = await callServiceGraphQL<Resp>(query, variables);
+  return extractAckFromResponse(
+    data,
+    ["seatPlayer", "seat_player"],
+    "seatPlayer"
+  );
 }
 
 export async function unseatPlayer(params: {
@@ -587,7 +641,7 @@ export async function unseatPlayer(params: {
   seatIndex: number;
 }): Promise<MutationAck> {
   const query = `
-    mutation UnseatPlayer($tableId: Int!, $seatIndex: Int!) {
+    mutation UnseatPlayer($tableId: String!, $seatIndex: Int!) {
       unseatPlayer(tableId: $tableId, seatIndex: $seatIndex) {
         ok
         message
@@ -600,8 +654,17 @@ export async function unseatPlayer(params: {
     unseat_player?: any;
   };
 
-  const data = await callServiceGraphQL<Resp>(query, params);
-  return extractAckFromResponse(data, ["unseatPlayer", "unseat_player"], "unseatPlayer");
+  const variables = {
+    ...params,
+    tableId: String(params.tableId),
+  };
+
+  const data = await callServiceGraphQL<Resp>(query, variables);
+  return extractAckFromResponse(
+    data,
+    ["unseatPlayer", "unseat_player"],
+    "unseatPlayer"
+  );
 }
 
 export async function adjustStack(params: {
@@ -610,7 +673,7 @@ export async function adjustStack(params: {
   delta: number;
 }): Promise<MutationAck> {
   const query = `
-    mutation AdjustStack($tableId: Int!, $seatIndex: Int!, $delta: Int!) {
+    mutation AdjustStack($tableId: String!, $seatIndex: Int!, $delta: Int!) {
       adjustStack(tableId: $tableId, seatIndex: $seatIndex, delta: $delta) {
         ok
         message
@@ -623,8 +686,17 @@ export async function adjustStack(params: {
     adjust_stack?: any;
   };
 
-  const data = await callServiceGraphQL<Resp>(query, params);
-  return extractAckFromResponse(data, ["adjustStack", "adjust_stack"], "adjustStack");
+  const variables = {
+    ...params,
+    tableId: String(params.tableId),
+  };
+
+  const data = await callServiceGraphQL<Resp>(query, variables);
+  return extractAckFromResponse(
+    data,
+    ["adjustStack", "adjust_stack"],
+    "adjustStack"
+  );
 }
 
 export async function startHand(params: {
@@ -632,7 +704,7 @@ export async function startHand(params: {
   handId: number;
 }): Promise<MutationAck> {
   const query = `
-    mutation StartHand($tableId: Int!, $handId: Int!) {
+    mutation StartHand($tableId: String!, $handId: Int!) {
       startHand(tableId: $tableId, handId: $handId) {
         ok
         message
@@ -645,8 +717,17 @@ export async function startHand(params: {
     start_hand?: any;
   };
 
-  const data = await callServiceGraphQL<Resp>(query, params);
-  return extractAckFromResponse(data, ["startHand", "start_hand"], "startHand");
+  const variables = {
+    ...params,
+    tableId: String(params.tableId),
+  };
+
+  const data = await callServiceGraphQL<Resp>(query, variables);
+  return extractAckFromResponse(
+    data,
+    ["startHand", "start_hand"],
+    "startHand"
+  );
 }
 
 // UI action тип
@@ -682,7 +763,7 @@ export async function playerAction(params: {
 }): Promise<MutationAck> {
   const query = `
     mutation PlayerAction(
-      $tableId: Int!,
+      $tableId: String!,
       $action: GqlPlayerActionKind!,
       $amount: Int
     ) {
@@ -694,7 +775,7 @@ export async function playerAction(params: {
   `;
 
   const variables = {
-    tableId: params.tableId,
+    tableId: String(params.tableId),
     action: mapUiActionToGql(params.action),
     amount: params.amount ?? null,
   };
@@ -705,7 +786,11 @@ export async function playerAction(params: {
   };
 
   const data = await callServiceGraphQL<Resp>(query, variables);
-  return extractAckFromResponse(data, ["playerAction", "player_action"], "playerAction");
+  return extractAckFromResponse(
+    data,
+    ["playerAction", "player_action"],
+    "playerAction"
+  );
 }
 
 export async function tickTable(params: {
@@ -713,7 +798,7 @@ export async function tickTable(params: {
   deltaSecs: number;
 }): Promise<MutationAck> {
   const query = `
-    mutation TickTable($tableId: Int!, $deltaSecs: Int!) {
+    mutation TickTable($tableId: String!, $deltaSecs: Int!) {
       tickTable(tableId: $tableId, deltaSecs: $deltaSecs) {
         ok
         message
@@ -726,8 +811,17 @@ export async function tickTable(params: {
     tick_table?: any;
   };
 
-  const data = await callServiceGraphQL<Resp>(query, params);
-  return extractAckFromResponse(data, ["tickTable", "tick_table"], "tickTable");
+  const variables = {
+    ...params,
+    tableId: String(params.tableId),
+  };
+
+  const data = await callServiceGraphQL<Resp>(query, variables);
+  return extractAckFromResponse(
+    data,
+    ["tickTable", "tick_table"],
+    "tickTable"
+  );
 }
 
 // ============================================================================

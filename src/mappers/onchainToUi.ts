@@ -94,10 +94,6 @@ export function mapCard(card: OnChainCard, hidden: boolean = false): UICard {
 
 /**
  * Разбор статусa игрока из строки в набор флагов UI-игрока.
- * PlayerStatus в Rust у тебя, вероятно, что-то вроде:
- * Active, Folded, AllIn, SittingOut и т.д.
- *
- * Здесь делаем робастный маппинг по строкам.
  */
 function deriveStatusFlags(status: string): {
   isFolded?: boolean;
@@ -117,12 +113,6 @@ function deriveStatusFlags(status: string): {
 
 /**
  * Преобразование OnChainPlayerAtTableDto -> Player (UI-тип).
- *
- * dealerSeat / smallBlindSeat / bigBlindSeat передаём снаружи,
- * чтобы корректно расставить флаги isDealer / isSmallBlind / isBigBlind.
- *
- * heroPlayerId — если ты позже захочешь подсвечивать "героя" и/или
- * показывать ему его hole_cards (пока UI-компоненты сами решают по hidden).
  */
 export function mapPlayer(
   p: OnChainPlayerAtTableDto,
@@ -135,9 +125,8 @@ export function mapPlayer(
 
   const isHero = heroPlayerId !== undefined && p.player_id === heroPlayerId;
 
-  // hole_cards мы конвертим в UICard, но скрывать/показывать будет конкретный компонент.
   const cards =
-    p.hole_cards?.map((c) => mapCard(c, !isHero)) ?? undefined;
+    p.hole_cards?.map((c: OnChainCard) => mapCard(c, !isHero)) ?? undefined;
 
   return {
     id: String(p.player_id),
@@ -163,14 +152,6 @@ export function mapPlayer(
 
 /**
  * Расчёт "smallBlindSeat" и "bigBlindSeat".
- *
- * На ончейне у тебя именно такие понятия может и не хранится в DTO,
- * поэтому мы делаем простой хелпер:
- *   - дилер = dealer_button seat
- *   - small blind = следующий за дилером
- *   - big blind = следующий за sb
- *
- * Это привязано к max_seats/players.length.
  */
 function computeBlindSeats(
   dealerSeat: number | null,
@@ -189,7 +170,7 @@ function computeBlindSeats(
 
   // ищем small blind
   let current = nextSeat(dealerSeat);
-  for (let i = 0; i < maxSeats; i++) {
+  for (let i = 0; i < maxSeats; i += 1) {
     if (seatsOccupied.has(current)) {
       sb = current;
       break;
@@ -200,7 +181,7 @@ function computeBlindSeats(
   // ищем big blind
   if (sb !== null) {
     current = nextSeat(sb);
-    for (let i = 0; i < maxSeats; i++) {
+    for (let i = 0; i < maxSeats; i += 1) {
       if (seatsOccupied.has(current)) {
         bb = current;
         break;
@@ -217,9 +198,6 @@ function computeBlindSeats(
  * - players: Player[]
  * - communityCards: UICard[]
  * - gameState: GameState
- *
- * Чтобы твои UI-компоненты (OvalTable, PlayerSeat, и т.п.) могли
- * использовать уже знакомый формат.
  */
 export function mapTableToUi(
   table: OnChainTableViewDto,
@@ -236,31 +214,28 @@ export function mapTableToUi(
     table.max_seats
   );
 
-  const players: Player[] = table.players.map((p) =>
+  const players: Player[] = table.players.map((p: OnChainPlayerAtTableDto) =>
     mapPlayer(p, dealerSeat, smallBlindSeat, bigBlindSeat, heroPlayerId)
   );
 
-  const communityCards: UICard[] = table.board.map((c) =>
+  const communityCards: UICard[] = table.board.map((c: OnChainCard) =>
     mapCard(c, false)
   );
 
-  // currentBet: берём максимальную ставку на текущей улице.
-  const currentBet =
-    table.players.reduce(
-      (max, p) => (p.current_bet > max ? p.current_bet : max),
-      0
-    ) ?? 0;
+  const currentBet = table.players.reduce(
+    (max: number, p: OnChainPlayerAtTableDto) =>
+      p.current_bet > max ? p.current_bet : max,
+    0
+  );
 
-  // minimumRaise: ончейн DTO пока явно не отдаёт min_raise,
-  // можно считать его (big blind * 2) как грубый default,
-  // или просто оставить 0 / currentBet — в зависимости от требований.
   const minimumRaise = table.big_blind * 2;
 
   const currentPlayerId =
     table.current_actor_seat !== null
       ? String(
           table.players.find(
-            (p) => p.seat_index === table.current_actor_seat
+            (p: OnChainPlayerAtTableDto) =>
+              p.seat_index === table.current_actor_seat
           )?.player_id ?? ""
         )
       : "";
@@ -270,9 +245,9 @@ export function mapTableToUi(
     communityCards,
     currentBet,
     minimumRaise,
-    boardTexture: table.street, // можно использовать street как "текстуру" доски для UI
+    boardTexture: table.street,
     currentPlayer: currentPlayerId,
-    timeRemaining: 0, // таймеры ты реализуешь отдельно, если захочешь
+    timeRemaining: 0,
   };
 
   return {
@@ -281,6 +256,9 @@ export function mapTableToUi(
     gameState,
   };
 }
+
+// Удобный тип результата маппера, чтобы не было any в TablePage.
+export type UiTableFromOnchain = ReturnType<typeof mapTableToUi>;
 
 // =====================
 // МАППИНГ ТУРНИРА

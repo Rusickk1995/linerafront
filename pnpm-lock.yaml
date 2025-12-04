@@ -9,7 +9,7 @@ importers:
   .:
     dependencies:
       '@linera/client':
-        specifier: ^0.15.6
+        specifier: 0.15.6
         version: 0.15.6
       '@supabase/supabase-js':
         specifier: ^2.57.4
