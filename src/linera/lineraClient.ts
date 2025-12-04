@@ -121,10 +121,11 @@ export async function callServiceGraphQL<TData>(
 ): Promise<TData> {
   const backend = await getBackend();
 
-  const payload = { query, variables };
+const payload = { query, variables };
 
-  // service.rs ожидает JSON формата { query, variables } как строку
-  const raw = await backend.query(JSON.stringify(payload));
+// ВАЖНО: передаём объект, а не JSON-строку
+const raw = await backend.query(payload as any);
+
 
   let parsed: GraphQLResponse<TData>;
   try {
