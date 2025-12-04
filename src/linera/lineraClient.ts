@@ -73,21 +73,24 @@ async function createBackend(): Promise<Application> {
   const appId = requireEnv("VITE_LINERA_APP_ID", APP_ID);
   const faucetUrl = requireEnv("VITE_LINERA_FAUCET_URL", FAUCET_URL);
 
-  // 1) Faucet (Testnet Conway)
-  const faucet = await new Faucet(faucetUrl);
+  // 1) Faucet (Conway testnet)
+  const faucet = new Faucet(faucetUrl);
 
-  // 2) Создаем временный кошелек через faucet
+  // 2) Временный кошелек через faucet
   const wallet: Wallet = await faucet.createWallet();
 
-  // 3) Клиент поверх кошелька
-  const client = await new Client(wallet);
+  // 3) Клиент поверх кошелька.
+  //    JS-runtime по факту принимает один аргумент (wallet),
+  //    типы TS нам только мешают, поэтому кастим в any.
+  const client: Client = new (Client as any)(wallet as any);
 
-  // 4) Claim цепь у faucet (чтобы было что-то своё)
-  await faucet.claimChain(client);
+  // 4) Просим faucet выдать цепь этому клиенту.
+  //    В реальной реализации ожидается именно Client.
+  await (faucet as any).claimChain(client as any);
 
-  // 5) Берём frontend твоего приложения по APP_ID
+  // 5) Берём frontend твоего приложения по APP_ID.
   const frontend = client.frontend();
-  const application = await frontend.application(appId);
+  const application: Application = await frontend.application(appId);
 
   return application;
 }
