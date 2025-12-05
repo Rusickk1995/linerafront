@@ -77,23 +77,27 @@ async function createBackend(): Promise<Application> {
   const appId = requireEnv("VITE_LINERA_APP_ID", APP_ID);
   const faucetUrl = requireEnv("VITE_LINERA_FAUCET_URL", FAUCET_URL);
 
-  // 1) Faucet (Conway testnet)
-  const faucet = new Faucet(faucetUrl);
+  // 1) Faucet (Conway testnet) — конструктор асинхронный
+  const faucet: Faucet = (await new (Faucet as any)(
+    faucetUrl
+  )) as Faucet;
 
-  // 2) Временный кошелек через faucet
-  const wallet: Wallet = await faucet.createWallet();
+  // 2) Временный кошелёк через faucet
+  const wallet: Wallet = (await (faucet as any).createWallet()) as Wallet;
 
-  // 3) Клиент поверх кошелька.
-  //    JS-runtime по факту принимает один аргумент (wallet),
-  //    типы TS нам только мешают, поэтому кастим в any.
-  const client: Client = new (Client as any)(wallet as any);
+  // 3) Просим faucet выдать цепь этому кошельку
+  //    (в простом случае без внешнего адреса достаточно самого wallet)
+  if (typeof (faucet as any).claimChain === "function") {
+    await (faucet as any).claimChain(wallet as any);
+  }
 
-  // 4) Просим faucet выдать цепь этому клиенту.
-  //    В реальной реализации ожидается именно Client.
-  await (faucet as any).claimChain(client as any);
+  // 4) Клиент поверх кошелька — тоже async конструктор
+  const client: Client = (await new (Client as any)(
+    wallet as any
+  )) as Client;
 
   // 5) Берём frontend твоего приложения по APP_ID.
-  const frontend = client.frontend();
+  const frontend = (client as any).frontend();
   const application: Application = await frontend.application(appId);
 
   return application;
@@ -106,13 +110,18 @@ async function getBackend(): Promise<Application> {
   return backendPromise;
 }
 
-// ГЛОБАЛЬНАЯ инициализация Linera Web client.
-// Любой запрос / мутация должен ждать этот промис.
+// Инициализация при загрузке страницы (по просьбе ребят из dev-чата)
 async function init(): Promise<void> {
-  await getBackend();
+  try {
+    await getBackend();
+    console.log("[lineraClient] init: backend ready");
+  } catch (e) {
+    console.error("[lineraClient] init failed:", e);
+  }
 }
 
-// экспортируем промис готовности клиента
+// Можно импортировать и при желании ждать:
+//   await lineraReady;
 export const lineraReady: Promise<void> = init();
 
 // ============================================================================
@@ -132,9 +141,6 @@ async function callServiceGraphQL<TData>(
   query: string,
   variables?: Record<string, unknown>
 ): Promise<TData> {
-  // ЖДЁМ ПОЛНОЙ ИНИЦИАЛИЗАЦИИ КЛИЕНТА
-  await lineraReady;
-
   const backend = await getBackend();
 
   // 1) Формируем payload { query, variables }
@@ -256,6 +262,13 @@ export interface MutationAck {
 //                  Хелперы для ACK (MutationAck)
 // ============================================================================
 
+/**
+ * Нормализация произвольного ответа бэкенда к MutationAck.
+ * Поддерживает:
+ *  - { ok: bool, message?: string }
+ *  - { success: bool, error?: string }
+ *  - любые truthy / falsy значения в raw.ok.
+ */
 function normalizeAck(raw: any, context: string): MutationAck {
   if (!raw || typeof raw !== "object") {
     console.error(`[lineraClient] ${context} raw non-object ack:`, raw);
@@ -288,11 +301,16 @@ function normalizeAck(raw: any, context: string): MutationAck {
   return { ok, message };
 }
 
+/**
+ * Достаёт ack из объекта ответа по нескольким возможным названиям полей.
+ */
 function extractAckFromResponse(
   data: any,
   fieldNames: string[],
   context: string
 ): MutationAck {
+  // Если бэкенд вернул просто строку / число / null (как хэш операции),
+  // считаем, что всё ок и не спамим ошибками.
   if (data === null || typeof data !== "object") {
     console.log(
       `[lineraClient] ${context}: non-object GraphQL data (treated as ok):`,
@@ -310,6 +328,8 @@ function extractAckFromResponse(
     }
   }
 
+  // Поле не найдено, но это не критично — просто логируем как debug
+  // и возвращаем "успех", дальше фронт всё равно перечитает состояние через fetch*.
   console.log(
     `[lineraClient] ${context}: ack field not found in data (treated as ok):`,
     data
@@ -342,7 +362,7 @@ function mapPlayer(g: GqlPlayerAtTable): OnChainPlayerAtTableDto {
 
 function mapTable(g: GqlTableView): OnChainTableViewDto {
   return {
-    table_id: Number(g.tableId),
+    table_id: Number(g.tableId), // из String в number для твоего DTO
     name: g.name,
     max_seats: g.maxSeats,
     small_blind: g.smallBlind,
