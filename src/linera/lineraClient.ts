@@ -115,39 +115,30 @@ interface GraphQLResponse<TData> {
  * Главная точка входа: отправка GraphQL-запроса в твой Poker service
  * через Linera Web client (без локального HTTP GraphQL).
  */
-export async function callServiceGraphQL<TData>(
+async function callServiceGraphQL<TData>(
   query: string,
   variables?: Record<string, unknown>
 ): Promise<TData> {
   const backend = await getBackend();
 
-  // Формируем GraphQL-payload
-  const gqlRequest = {
-    query,
-    variables: variables ?? {},
-  };
+  // 1) Формируем payload { query, variables }
+  const payload = { query, variables };
 
-  // ВАЖНО: отправляем JSON-СТРОКУ
-  const raw = await backend.query(JSON.stringify(gqlRequest));
+  // 2) ВАЖНО: отправляем СТРОКУ, потому что Query = String
+  const raw = await backend.query(JSON.stringify(payload));
 
+  // 3) Разбираем ответ (это тоже строка JSON)
   let parsed: GraphQLResponse<TData>;
   try {
-    const text =
-      typeof raw === "string"
-        ? raw
-        : raw != null
-        ? String(raw)
-        : "";
-
-    parsed = JSON.parse(text) as GraphQLResponse<TData>;
+    parsed = JSON.parse(raw) as GraphQLResponse<TData>;
   } catch (e) {
-    console.error("[lineraClient] Failed to parse GraphQL response", raw, e);
+    console.error("[callServiceGraphQL] Failed to parse response", raw);
     throw new Error("Invalid JSON from backend.query()");
   }
 
   if (parsed.errors && parsed.errors.length > 0) {
     const msg = parsed.errors.map((er) => er.message).join("; ");
-    console.error("[lineraClient] GraphQL errors", parsed.errors);
+    console.error("[callServiceGraphQL] GraphQL errors", parsed.errors);
     throw new Error(`Linera GraphQL error: ${msg}`);
   }
 
