@@ -121,15 +121,21 @@ export async function callServiceGraphQL<TData>(
 ): Promise<TData> {
   const backend = await getBackend();
 
-  // Формируем GraphQL-payload в формате Apollo POST
+  // Формируем payload, как в обычном GraphQL over HTTP
   const payload = { query, variables };
 
-  // ВАЖНО: передаём СТРОКУ, а не объект
+  // ВАЖНО: отправляем СТРОКУ, потому что в ABI Query = String
   const raw = await (backend as any).query(JSON.stringify(payload));
+
+  // backend.query должен вернуть JSON-строку
+  if (typeof raw !== "string") {
+    console.error("[lineraClient] backend.query returned non-string:", raw);
+    throw new Error("Invalid response from backend.query (not a string)");
+  }
 
   let parsed: GraphQLResponse<TData>;
   try {
-    parsed = JSON.parse(raw as string) as GraphQLResponse<TData>;
+    parsed = JSON.parse(raw) as GraphQLResponse<TData>;
   } catch (e) {
     console.error("[lineraClient] Failed to parse GraphQL response", raw);
     throw new Error("Invalid JSON from backend.query()");
