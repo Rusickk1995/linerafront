@@ -1,20 +1,18 @@
-import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
+// vite.config.ts
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
 
-// Конфиг под @linera/client (отдельный entrypoint и preserveEntrySignatures)
+// ВАЖНО:
+//  - Никаких отдельных entrypoint'ов для @linera/client
+//  - Никаких preserveEntrySignatures
+//  - Никакого optimizeDeps.exclude для @linera/client
+//  - Один алиас на browser-bundle (linera_web.js), как в доках.
+
 export default defineConfig({
   plugins: [react()],
-  build: {
-    rollupOptions: {
-      input: {
-        main: 'index.html',
-        linera: '@linera/client',
-      },
-      preserveEntrySignatures: 'strict',
+  resolve: {
+    alias: {
+      "@linera/client": "@linera/client/dist/linera_web.js",
     },
-  },
-  optimizeDeps: {
-    // @linera/client и так сам себя соберет, не надо, чтобы Vite его "оптимизировал"
-    exclude: ['@linera/client', 'lucide-react'],
   },
 });

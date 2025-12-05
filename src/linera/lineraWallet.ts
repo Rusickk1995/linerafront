@@ -1,66 +1,79 @@
 // src/linera/lineraWallet.ts
 //
-// Conway / Testnet frontend:
-//  - init WASM
-//  - Faucet
-//  - Wallet
-//  - claimChain
-//  - Client + frontend().application(APP_ID)
+// Linera Conway / Testnet frontend инициализация "как в доках":
+//
+//  1) initLinera()  – init WASM
+//  2) Faucet        – Conway faucet
+//  3) Wallet        – кошелёк пользователя
+//  4) claimChain    – создаём microchain
+//  5) Client        – клиент поверх wallet
+//  6) frontend().application(APP_ID)
+//
+// НИКАКОГО MetaMask, НИКАКОГО signer – только базовый встроенный кошелёк.
 
-import * as linera from "@linera/client";
+import initLinera, {
+  Application,
+  Client,
+  Faucet,
+  Wallet,
+} from "@linera/client";
 import { LINERA_APP_ID, LINERA_FAUCET_URL } from "./lineraEnv";
 
-// Типы из @linera/client
-export type Application = linera.Application;
-export type Client = linera.Client;
-export type Wallet = linera.Wallet;
-export type Faucet = linera.Faucet;
-
+let wasmInitPromise: Promise<unknown> | null = null;
 let backendPromise: Promise<Application> | null = null;
 
 /**
  * Один раз инициализируем WASM.
+ * Здесь мы просто вызываем initLinera() как в официальных примерах.
  */
-async function initWasm(): Promise<void> {
-  const initFn: () => Promise<unknown> = (linera as any).default;
-  if (typeof initFn !== "function") {
-    throw new Error("@linera/client: default init function not found");
+async function ensureWasmInitialized(): Promise<void> {
+  if (!wasmInitPromise) {
+    wasmInitPromise = initLinera();
   }
-  await initFn();
+  await wasmInitPromise;
 }
 
 /**
  * Создаём backend Application поверх faucet/wallet/client.
  */
 async function createBackend(): Promise<Application> {
-  await initWasm();
+  await ensureWasmInitialized();
 
   console.log("[lineraWallet] creating backend...");
-
-  // 1) Faucet Conway testnet — ВАЖНО: await new
-  const faucet: Faucet = (await new (linera as any).Faucet(
-    LINERA_FAUCET_URL
-  )) as Faucet;
   console.log("[lineraWallet] faucet url =", LINERA_FAUCET_URL);
 
+  // 1) Faucet Conway testnet
+  //    В runtime конструктор асинхронный, поэтому используем await new.
+  const faucet = (await new (Faucet as any)(
+    LINERA_FAUCET_URL
+  )) as unknown as Faucet;
+
   // 2) Новый wallet
-  const wallet: Wallet = (await (faucet as any).createWallet()) as Wallet;
+  const wallet = (await (faucet as any).createWallet()) as Wallet;
   console.log("[lineraWallet] wallet =", wallet);
 
-  // 3) Client поверх wallet — ВАЖНО: await new
-  const client: Client = (await new (linera as any).Client(wallet)) as Client;
-  console.log(
-    "[lineraWallet] client created, is Promise? ",
-    client instanceof Promise
-  );
+  // 3) Claim chain для этого кошелька.
+  //    Можно делать и через faucet + wallet, и через faucet + client.
+  const owner = "0x0000000000000000000000000000000000000000";
+  try {
+    // если твой faucet ожидает (wallet, owner):
+    await (faucet as any).claimChain(wallet as any, owner);
+    console.log("[lineraWallet] claimChain ok (wallet + owner)");
+  } catch (e) {
+    console.error("[lineraWallet] claimChain ERROR", e);
+    throw e;
+  }
 
-  // 4) Claim chain через client
-  const chainId: string = await (faucet as any).claimChain(client);
-  console.log("[lineraWallet] claimChain ok, chainId =", chainId);
+  // 4) Client поверх wallet
+  //    В runtime конструктор тоже асинхронный – await new Client(wallet).
+  const client = (await new (Client as any)(wallet)) as unknown as Client;
+  console.log("[lineraWallet] client created =", client);
 
-  // 5) frontend().application(APP_ID)
+  // 5) frontend().application(APP_ID) – как в доках Linera.
   const frontend = (client as any).frontend();
-  const application: Application = await frontend.application(LINERA_APP_ID);
+  const application = (await frontend.application(
+    LINERA_APP_ID
+  )) as Application;
   console.log("[lineraWallet] application ready, appId =", LINERA_APP_ID);
 
   return application;
