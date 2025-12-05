@@ -77,50 +77,33 @@ async function createBackend(): Promise<Application> {
   const appId = requireEnv("VITE_LINERA_APP_ID", APP_ID);
   const faucetUrl = requireEnv("VITE_LINERA_FAUCET_URL", FAUCET_URL);
 
-  // 1) Faucet (Conway testnet)
+  // 1) Подключаемся к faucet
   const faucet = new Faucet(faucetUrl);
 
-  // 2) Временный кошелёк через faucet
+  // 2) Создаём временный кошелёк
   const wallet: Wallet = await faucet.createWallet();
   console.log("[lineraClient] wallet =", wallet);
 
-  // 3) Находим owner внутри кошелька
-  const w: any = wallet as any;
-  const owner =
-    w.owner ??
-    w.defaultOwner ??
-    w.default_owner ??
-    w.address ??
-    null;
+  // 3) Создаём клиент поверх кошелька
+  const client: Client = new Client(wallet as any);
+  console.log("[lineraClient] client created");
 
-  if (!owner) {
-    console.error(
-      "[lineraClient] cannot detect owner field on wallet, keys =",
-      Object.keys(w)
-    );
-    throw new Error(
-      "[lineraClient] claimChain: owner is undefined. Check wallet structure in console."
-    );
+  // 4) Просим faucet выдать цепь этому клиенту
+  try {
+    const chainId = await (faucet as any).claimChain(client as any);
+    console.log("[lineraClient] chainId =", chainId);
+  } catch (e) {
+    console.error("[lineraClient] claimChain failed:", e);
+    throw e;
   }
 
-  console.log("[lineraClient] owner for claimChain =", owner);
-
-  // 4) Просим faucet выдать цепь этому кошельку
-  const chainId: string = await (faucet as any).claimChain(
-    wallet as any,
-    owner
-  );
-  console.log("[lineraClient] claimed chainId =", chainId);
-
-  // 5) Клиент поверх кошелька
-  const client: Client = new (Client as any)(wallet as any);
-
-  // 6) Берём frontend твоего приложения по APP_ID.
+  // 5) Берём frontend твоего приложения по APP_ID
   const frontend = client.frontend();
   const application: Application = await frontend.application(appId);
 
   return application;
 }
+
 
 
 async function getBackend(): Promise<Application> {
