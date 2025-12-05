@@ -46,7 +46,6 @@ const FAUCET_URL =
 console.log("[lineraClient] APP_ID from bundle =", APP_ID);
 (window as any).APP_ID_DEBUG = APP_ID;
 
-
 // Если не хватает env — сразу падаем с понятной ошибкой
 function requireEnv(name: string, value: string | undefined): string {
   if (!value) {
@@ -107,6 +106,15 @@ async function getBackend(): Promise<Application> {
   return backendPromise;
 }
 
+// ГЛОБАЛЬНАЯ инициализация Linera Web client.
+// Любой запрос / мутация должен ждать этот промис.
+async function init(): Promise<void> {
+  await getBackend();
+}
+
+// экспортируем промис готовности клиента
+export const lineraReady: Promise<void> = init();
+
 // ============================================================================
 //      GraphQL-обёртка через backend.query(JSON.stringify({ query, variables }))
 // ============================================================================
@@ -124,6 +132,9 @@ async function callServiceGraphQL<TData>(
   query: string,
   variables?: Record<string, unknown>
 ): Promise<TData> {
+  // ЖДЁМ ПОЛНОЙ ИНИЦИАЛИЗАЦИИ КЛИЕНТА
+  await lineraReady;
+
   const backend = await getBackend();
 
   // 1) Формируем payload { query, variables }
@@ -143,7 +154,6 @@ async function callServiceGraphQL<TData>(
     );
     throw e;
   }
-
 
   // 3) Разбираем ответ (это тоже строка JSON)
   let parsed: GraphQLResponse<TData>;
@@ -246,13 +256,6 @@ export interface MutationAck {
 //                  Хелперы для ACK (MutationAck)
 // ============================================================================
 
-/**
- * Нормализация произвольного ответа бэкенда к MutationAck.
- * Поддерживает:
- *  - { ok: bool, message?: string }
- *  - { success: bool, error?: string }
- *  - любые truthy / falsy значения в raw.ok.
- */
 function normalizeAck(raw: any, context: string): MutationAck {
   if (!raw || typeof raw !== "object") {
     console.error(`[lineraClient] ${context} raw non-object ack:`, raw);
@@ -285,16 +288,11 @@ function normalizeAck(raw: any, context: string): MutationAck {
   return { ok, message };
 }
 
-/**
- * Достаёт ack из объекта ответа по нескольким возможным названиям полей.
- */
 function extractAckFromResponse(
   data: any,
   fieldNames: string[],
   context: string
 ): MutationAck {
-  // Если бэкенд вернул просто строку / число / null (как хэш операции),
-  // считаем, что всё ок и не спамим ошибками.
   if (data === null || typeof data !== "object") {
     console.log(
       `[lineraClient] ${context}: non-object GraphQL data (treated as ok):`,
@@ -312,8 +310,6 @@ function extractAckFromResponse(
     }
   }
 
-  // Поле не найдено, но это не критично — просто логируем как debug
-  // и возвращаем "успех", дальше фронт всё равно перечитает состояние через fetch*.
   console.log(
     `[lineraClient] ${context}: ack field not found in data (treated as ok):`,
     data
@@ -346,7 +342,7 @@ function mapPlayer(g: GqlPlayerAtTable): OnChainPlayerAtTableDto {
 
 function mapTable(g: GqlTableView): OnChainTableViewDto {
   return {
-    table_id: Number(g.tableId), // из String в number для твоего DTO
+    table_id: Number(g.tableId),
     name: g.name,
     max_seats: g.maxSeats,
     small_blind: g.smallBlind,
@@ -1012,7 +1008,7 @@ async function createTournamentMutation(params: {
 
   const data = await callServiceGraphQL<Resp>(query, {
     tournamentId: params.tournamentId,
-    configJson,       // ← ИМЕННО ТАК
+    configJson, // ← ИМЕННО ТАК
   });
 
   return extractAckFromResponse(
