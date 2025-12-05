@@ -60,12 +60,15 @@ function requireEnv(name: string, value: string | undefined): string {
 // Инициализация WASM + backend
 // ============================
 
+// ============================
+// Инициализация WASM + backend
+// ============================
+
 let wasmInitPromise: Promise<unknown> | null = null;
 let backendPromise: Promise<Application> | null = null;
 
 async function ensureWasmInitialized(): Promise<void> {
   if (!wasmInitPromise) {
-    // default export — инициализация WASM-рантайма Linera в браузере
     wasmInitPromise = initLinera();
   }
   await wasmInitPromise;
@@ -77,34 +80,27 @@ async function createBackend(): Promise<Application> {
   const appId = requireEnv("VITE_LINERA_APP_ID", APP_ID);
   const faucetUrl = requireEnv("VITE_LINERA_FAUCET_URL", FAUCET_URL);
 
-  // 1) Подключаемся к faucet
+  // 1) Фаусет Conway testnet
   const faucet = new Faucet(faucetUrl);
 
-  // 2) Создаём временный кошелёк
-  const wallet: Wallet = await faucet.createWallet();
+  // 2) Временный кошелек через фаусет
+  const wallet = (await (faucet as any).createWallet()) as Wallet;
   console.log("[lineraClient] wallet =", wallet);
 
-  // 3) Создаём клиент поверх кошелька
-  const client: Client = new Client(wallet as any);
-  console.log("[lineraClient] client created");
+  // 3) ВАЖНО: Client создаётся асинхронно, нужен await new Client(wallet)
+  const client = (await new (Client as any)(wallet as any)) as Client;
+  console.log("[lineraClient] client created =", client);
 
-  // 4) Просим faucet выдать цепь этому клиенту
-  try {
-    const chainId = await (faucet as any).claimChain(client as any);
-    console.log("[lineraClient] chainId =", chainId);
-  } catch (e) {
-    console.error("[lineraClient] claimChain failed:", e);
-    throw e;
-  }
+  // 4) Просим фаусет выдать цепь этому client’у
+  const chainId = await (faucet as any).claimChain(client as any);
+  console.log("[lineraClient] chainId from faucet =", chainId);
 
-  // 5) Берём frontend твоего приложения по APP_ID
+  // 5) Берём frontend приложения по APP_ID
   const frontend = client.frontend();
-  const application: Application = await frontend.application(appId);
+  const application = (await frontend.application(appId)) as Application;
 
   return application;
 }
-
-
 
 async function getBackend(): Promise<Application> {
   if (!backendPromise) {
@@ -113,7 +109,7 @@ async function getBackend(): Promise<Application> {
   return backendPromise;
 }
 
-// Инициализация при загрузке страницы (по просьбе ребят из dev-чата)
+// Инициализация при загрузке страницы (как уже сделано)
 async function init() {
   try {
     await getBackend();
@@ -123,8 +119,6 @@ async function init() {
   }
 }
 
-// Можно импортировать и при желании ждать:
-//   await lineraReady;
 export const lineraReady: Promise<void> = init();
 
 // ============================================================================
