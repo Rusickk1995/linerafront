@@ -1,88 +1,130 @@
 // src/pages/LandingPage.tsx
 
-import React from "react";
+import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { getBackend } from "../linera/lineraClient";
 
 const LandingPage: React.FC = () => {
   const navigate = useNavigate();
 
-  const handlePlayNow = () => {
-    navigate("/create");
-  };
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  async function handlePlayTournament() {
+    if (isConnecting) return;
+
+    setErrorMessage(null);
+    setIsConnecting(true);
+
+    try {
+      console.log("[LandingPage] Connecting to Linera backend...");
+      // Здесь под капотом:
+      //  - initLinera()
+      //  - Faucet + createWallet()
+      //  - claimChain()
+      //  - Client + Application(APP_ID)
+      await getBackend();
+
+      console.log("[LandingPage] Linera backend ready, navigating to lobby");
+      // Куда пускать после подключения – решай сам:
+      // "/lobby" или "/create".
+      navigate("/lobby");
+    } catch (e) {
+      console.error("[LandingPage] Failed to connect to Linera backend:", e);
+
+      setErrorMessage(
+        "Не удалось подключиться к Linera testnet. Попробуйте обновить страницу или зайти позже."
+      );
+    } finally {
+      setIsConnecting(false);
+    }
+  }
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center text-white relative px-4">
-      {/* Фон */}
-      <div className="pointer-events-none fixed inset-0 -z-10 bg-gradient-to-b from-black via-black to-red-950/80" />
+    <div className="min-h-screen bg-black text-white flex flex-col">
+      {/* Hero-секция */}
+      <main className="flex-1 flex flex-col items-center justify-center px-4">
+        <div className="max-w-3xl text-center">
+          <div className="mb-8 flex justify-center">
+            <div className="h-20 w-20 rounded-full bg-red-600/40 flex items-center justify-center shadow-[0_0_40px_rgba(248,113,113,0.8)]">
+              <span className="text-4xl">♠</span>
+            </div>
+          </div>
 
-      {/* Лого + заголовок */}
-      <div className="text-center space-y-5 mb-12">
-        <div className="w-24 h-24 rounded-full border border-red-500/70 flex items-center justify-center mx-auto shadow-[0_0_40px_rgba(239,68,68,0.9)]">
-          <span className="text-5xl">♠</span>
-        </div>
+          <h1 className="text-4xl sm:text-5xl md:text-6xl font-extrabold tracking-[0.25em] mb-4">
+            <span className="text-white">LINERA</span>{" "}
+            <span className="text-red-500">POKER</span>
+          </h1>
 
-        <h1 className="text-5xl md:text-6xl font-extrabold tracking-[0.25em]">
-          LINERA <span className="text-red-500">POKER</span>
-        </h1>
-
-        <p className="text-base md:text-lg text-gray-100 max-w-2xl mx-auto">
-          On-chain Texas Hold&apos;em for degen grinders. Instant finality, fair
-          dealing and transparent pots — powered by Linera&apos;s microchains.
-        </p>
-      </div>
-
-      {/* Кнопка Play */}
-      <button
-        onClick={handlePlayNow}
-        className="relative inline-flex items-center justify-center px-10 py-4 rounded-full bg-red-600 hover:bg-red-500 text-lg font-semibold shadow-[0_0_40px_rgba(239,68,68,0.9)] transition mb-10"
-      >
-        <span className="mr-2 text-xl">🎮</span> Play Tournament
-      </button>
-
-      {/* Фичи */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl w-full">
-        <div className="bg-white/5 border border-white/10 rounded-2xl p-5 flex flex-col gap-2">
-          <h3 className="text-lg font-semibold flex items-center gap-2">
-            <span>⚡</span> Instant Finality
-          </h3>
-          <p className="text-sm text-gray-100">
-            No waiting for blocks. Hands resolve quickly thanks to Linera
-            microchains and fast execution.
+          <p className="text-base sm:text-lg text-gray-300 mb-10">
+            On-chain Texas Hold&apos;em for degen grinders. Instant finality,
+            fair dealing and transparent pots — powered by Linera&apos;s
+            microchains.
           </p>
+
+          <div className="flex flex-col items-center gap-4">
+            <button
+              onClick={handlePlayTournament}
+              disabled={isConnecting}
+              className={`inline-flex items-center justify-center px-10 py-4 rounded-full text-base sm:text-lg font-semibold
+                bg-red-600 hover:bg-red-500 disabled:bg-red-800
+                shadow-[0_0_40px_rgba(248,113,113,0.8)]
+                transition-colors transition-shadow duration-200
+                focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:ring-offset-black`}
+            >
+              {isConnecting ? "Connecting to Linera..." : "Play Tournament"}
+            </button>
+
+            <p className="text-xs text-gray-400 max-w-md">
+              При первом нажатии будет создан Linera-кошелёк и цепочка в
+              публичном Conway testnet. Все дальнейшие действия за столом будут
+              подписываться этим кошельком автоматически.
+            </p>
+
+            {errorMessage && (
+              <p className="text-xs text-red-400 max-w-md">{errorMessage}</p>
+            )}
+          </div>
         </div>
 
-        <div className="bg-white/5 border border-white/10 rounded-2xl p-5 flex flex-col gap-2">
-          <h3 className="text-lg font-semibold flex items-center gap-2">
-            <span>🧮</span> Transparent Pots
-          </h3>
-          <p className="text-sm text-gray-100">
-            Every chip, every pot and every payout is verifiable on-chain.
-          </p>
-        </div>
+        {/* Фичи ниже можно оставить как у тебя было */}
+        <section className="mt-16 grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl w-full">
+          <div className="rounded-2xl bg-zinc-900/80 border border-zinc-800 p-6">
+            <h3 className="flex items-center gap-2 font-semibold mb-2">
+              <span className="text-xl">⚡</span> Instant Finality
+            </h3>
+            <p className="text-sm text-gray-400">
+              No waiting for blocks. Hands resolve quickly thanks to Linera
+              microchains and fast execution.
+            </p>
+          </div>
 
-        <div className="bg-white/5 border border-white/10 rounded-2xl p-5 flex flex-col gap-2">
-          <h3 className="text-lg font-semibold flex items-center gap-2">
-            <span>🃏</span> Tournament Engine
-          </h3>
-          <p className="text-sm text-gray-100">
-            Flexible structures: blinds, antes, rebuys, bounties and more —
-            configured in seconds.
-          </p>
-        </div>
-      </div>
+          <div className="rounded-2xl bg-zinc-900/80 border border-zinc-800 p-6">
+            <h3 className="flex items-center gap-2 font-semibold mb-2">
+              <span className="text-xl">🃏</span> Transparent Pots
+            </h3>
+            <p className="text-sm text-gray-400">
+              Every chip, every pot and every payout is verifiable on-chain.
+            </p>
+          </div>
 
-      {/* Футер-текст */}
-      <div className="mt-10 text-xs md:text-sm text-gray-400 text-center max-w-xl">
-        <p>
+          <div className="rounded-2xl bg-zinc-900/80 border border-zinc-800 p-6">
+            <h3 className="flex items-center gap-2 font-semibold mb-2">
+              <span className="text-xl">🧠</span> Tournament Engine
+            </h3>
+            <p className="text-sm text-gray-400">
+              Flexible structures: blinds, antes, rebuys, bounties and more —
+              configured in seconds.
+            </p>
+          </div>
+        </section>
+
+        <p className="mt-12 text-xs text-gray-500 max-w-2xl text-center">
           This is a non-custodial, testnet-only poker experience for Linera
           enthusiasts. No real-money gambling, only experiment and community
           fun.
         </p>
-        <p className="mt-2">
-          Built for devs, grinders and early adopters who want to try on-chain
-          poker mechanics before mainnet.
-        </p>
-      </div>
+      </main>
     </div>
   );
 };
