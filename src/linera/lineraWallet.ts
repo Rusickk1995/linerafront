@@ -1,13 +1,11 @@
 // src/linera/lineraWallet.ts
 //
-// Инициализация Linera Web client (@linera/client):
-// - init WASM
-// - Faucet
-// - Wallet
-// - claimChain
-// - Client + Application
-//
-// Здесь НЕТ GraphQL и покерной логики, только инфраструктура.
+// Инициализация Linera Web client (@linera/client) для Conway testnet:
+//  - init WASM
+//  - Faucet
+//  - Wallet
+//  - claimChain
+//  - Client + Application(APP_ID)
 
 import initLinera, {
   Application,
@@ -21,7 +19,7 @@ let wasmInitPromise: Promise<unknown> | null = null;
 let backendPromise: Promise<Application> | null = null;
 
 /**
- * Гарантируем, что wasm инициализирован только один раз.
+ * Инициализация WASM один раз.
  */
 async function ensureWasmInitialized(): Promise<void> {
   if (!wasmInitPromise) {
@@ -32,8 +30,7 @@ async function ensureWasmInitialized(): Promise<void> {
 
 /**
  * Фактическое создание backend (Application) поверх faucet/wallet/client.
- * Пока мы всё ещё создаём новый wallet и claimChain как в старой версии.
- * Позже сюда добавим нормальный createOrLoadWallet().
+ * Пока без сохранения кошелька – чистый Conway-flow.
  */
 async function createBackend(): Promise<Application> {
   await ensureWasmInitialized();
@@ -41,38 +38,39 @@ async function createBackend(): Promise<Application> {
   console.log("[lineraWallet] creating backend...");
 
   // 1) Подключаемся к faucet Conway testnet
-  const faucet = new (Faucet as any)(LINERA_FAUCET_URL as any);
+  const faucet = new Faucet(LINERA_FAUCET_URL);
 
   // 2) Создаём wallet через faucet
-  const wallet: Wallet = await (faucet as any).createWallet();
+  const wallet: Wallet = await faucet.createWallet();
   console.log("[lineraWallet] wallet =", wallet);
 
-  // 3) Claim chain — передаём wallet и owner-строку (пока заглушка)
-  const ownerAddress = "0x0000000000000000000000000000000000000000";
+  // 3) Claim chain для этого кошелька (owner пока заглушка)
+  const owner = "0x0000000000000000000000000000000000000000";
 
   try {
-    await (faucet as any).claimChain(wallet as any, ownerAddress);
+    await faucet.claimChain(wallet, owner);
     console.log("[lineraWallet] claimChain ok");
   } catch (e) {
-    console.error("[lineraWallet] claimChain failed:", e);
+    console.error("[lineraWallet] claimChain ERROR", e);
     throw e;
   }
 
   // 4) Создаём Client поверх этого wallet
-  const client: Client = new (Client as any)(wallet as any);
-  console.log("[lineraWallet] client created =", client);
+  // Conway API: new Client(wallet)
+  const client: Client = new Client(wallet as any);
+  console.log("[lineraWallet] client created");
 
-  // 5) Берём frontend твоего приложения по APP_ID
-  const frontend = (client as any).frontend();
-  const application: Application = await frontend.application(LINERA_APP_ID);
+  // 5) Conway API: client.application(APP_ID)
+  const application: Application = await (client as any).application(
+    LINERA_APP_ID
+  );
+  console.log("[lineraWallet] application ready (Conway)");
 
-  console.log("[lineraWallet] application ready");
   return application;
 }
 
 /**
  * Публичная точка входа: получить backend Application.
- * Результат кэшируется в backendPromise.
  */
 export async function getBackend(): Promise<Application> {
   if (!backendPromise) {
@@ -82,16 +80,8 @@ export async function getBackend(): Promise<Application> {
 }
 
 /**
- * Промис, который можно использовать для “ожидания готовности Linera”.
- * Например, если ты хочешь что-то логировать при старте.
+ * Можно использовать как “ожидание готовности Linera” при старте.
  */
-async function init() {
-  try {
-    await getBackend();
-    console.log("[lineraWallet] init ok");
-  } catch (e) {
-    console.error("[lineraWallet] init failed:", e);
-  }
-}
-
-export const lineraReady: Promise<void> = init();
+export const lineraReady: Promise<void> = getBackend().then(() => {
+  console.log("[lineraWallet] ready");
+});
