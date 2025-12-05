@@ -121,11 +121,16 @@ export async function callServiceGraphQL<TData>(
 ): Promise<TData> {
   const backend = await getBackend();
 
-const payload = { query, variables };
+  const payload = { query, variables };
 
-// ВАЖНО: передаём объект, а не JSON-строку
-const raw = await backend.query(payload as any);
+  // 1) Отправляем JSON-СТРОКУ, как ждёт service.rs (Query = String)
+  const rawAny = await (backend as any).query(JSON.stringify(payload));
 
+  // 2) Нормализуем ответ в строку (на всякий случай, если там Uint8Array)
+  const raw =
+    typeof rawAny === "string"
+      ? rawAny
+      : new TextDecoder().decode(rawAny as ArrayBuffer);
 
   let parsed: GraphQLResponse<TData>;
   try {
