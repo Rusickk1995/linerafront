@@ -121,23 +121,27 @@ export async function callServiceGraphQL<TData>(
 ): Promise<TData> {
   const backend = await getBackend();
 
-  // Формируем payload, как в обычном GraphQL over HTTP
-  const payload = { query, variables };
+  // Формируем GraphQL-payload
+  const gqlRequest = {
+    query,
+    variables: variables ?? {},
+  };
 
-  // ВАЖНО: отправляем СТРОКУ, потому что в ABI Query = String
-  const raw = await (backend as any).query(JSON.stringify(payload));
-
-  // backend.query должен вернуть JSON-строку
-  if (typeof raw !== "string") {
-    console.error("[lineraClient] backend.query returned non-string:", raw);
-    throw new Error("Invalid response from backend.query (not a string)");
-  }
+  // ВАЖНО: отправляем JSON-СТРОКУ
+  const raw = await backend.query(JSON.stringify(gqlRequest));
 
   let parsed: GraphQLResponse<TData>;
   try {
-    parsed = JSON.parse(raw) as GraphQLResponse<TData>;
+    const text =
+      typeof raw === "string"
+        ? raw
+        : raw != null
+        ? String(raw)
+        : "";
+
+    parsed = JSON.parse(text) as GraphQLResponse<TData>;
   } catch (e) {
-    console.error("[lineraClient] Failed to parse GraphQL response", raw);
+    console.error("[lineraClient] Failed to parse GraphQL response", raw, e);
     throw new Error("Invalid JSON from backend.query()");
   }
 
