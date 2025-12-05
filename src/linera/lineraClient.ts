@@ -42,6 +42,11 @@ const FAUCET_URL =
   ((import.meta as any).env.VITE_LINERA_FAUCET_URL as string | undefined) ??
   "https://faucet.testnet-conway.linera.net";
 
+// DEBUG: смотрим, какой APP_ID попал в бандл
+console.log("[lineraClient] APP_ID from bundle =", APP_ID);
+(window as any).APP_ID_DEBUG = APP_ID;
+
+
 // Если не хватает env — сразу падаем с понятной ошибкой
 function requireEnv(name: string, value: string | undefined): string {
   if (!value) {
