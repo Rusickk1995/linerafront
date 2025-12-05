@@ -80,23 +80,32 @@ async function createBackend(): Promise<Application> {
   const appId = requireEnv("VITE_LINERA_APP_ID", APP_ID);
   const faucetUrl = requireEnv("VITE_LINERA_FAUCET_URL", FAUCET_URL);
 
-  // 1) Фаусет Conway testnet
-  const faucet = new Faucet(faucetUrl);
+  // 1) Подключаемся к faucet Conway testnet
+  const faucet: Faucet = new Faucet(faucetUrl as any);
 
-  // 2) Кошелёк
-  const wallet = await faucet.createWallet();
+  // 2) Создаём wallet через faucet
+  const wallet: Wallet = await (faucet as any).createWallet();
   console.log("[lineraClient] wallet =", wallet);
 
-  // 3) Клиент поверх кошелька
-  const client = new Client(wallet);
+  // 3) Claim chain — ВАЖНО: передаём именно wallet.
+  // Второй аргумент owner — просто строковый идентификатор владельца.
+  // Для твоего кейса достаточно фиксированного адреса-заглушки.
+  const ownerAddress = "0x0000000000000000000000000000000000000000";
+
+  try {
+    await (faucet as any).claimChain(wallet as any, ownerAddress);
+    console.log("[lineraClient] claimChain ok");
+  } catch (e) {
+    console.error("[lineraClient] claimChain failed:", e);
+    throw e;
+  }
+
+  // 4) Создаём Client поверх этого wallet
+  const client: Client = new (Client as any)(wallet as any);
   console.log("[lineraClient] client created =", client);
 
-  // 4) Claim chain — ВАЖНО: сюда передаём ИМЕННО client
-  const chainId = await faucet.claimChain(client);
-  console.log("[lineraClient] chain id =", chainId);
-
-  // 5) Frontend приложения по APP_ID
-  const frontend = client.frontend();
+  // 5) Берём frontend твоего приложения по APP_ID
+  const frontend = (client as any).frontend();
   const application: Application = await frontend.application(appId);
 
   return application;
