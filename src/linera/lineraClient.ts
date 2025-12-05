@@ -77,31 +77,27 @@ async function createBackend(): Promise<Application> {
   const appId = requireEnv("VITE_LINERA_APP_ID", APP_ID);
   const faucetUrl = requireEnv("VITE_LINERA_FAUCET_URL", FAUCET_URL);
 
-  // 1) Faucet (Conway testnet) — конструктор асинхронный
-  const faucet: Faucet = (await new (Faucet as any)(
-    faucetUrl
-  )) as Faucet;
+  // 1) Создаём faucet (Conway testnet)
+  const faucet: Faucet = await new (Faucet as any)(faucetUrl);
 
   // 2) Временный кошелёк через faucet
-  const wallet: Wallet = (await (faucet as any).createWallet()) as Wallet;
+  const wallet: Wallet = await faucet.createWallet();
 
-  // 3) Просим faucet выдать цепь этому кошельку
-  //    (в простом случае без внешнего адреса достаточно самого wallet)
-  if (typeof (faucet as any).claimChain === "function") {
-    await (faucet as any).claimChain(wallet as any);
-  }
+  // 3) Клиент поверх кошелька (ВАЖНО: именно await new Client(wallet))
+  const client: Client = await new (Client as any)(wallet as any);
 
-  // 4) Клиент поверх кошелька — тоже async конструктор
-  const client: Client = (await new (Client as any)(
-    wallet as any
-  )) as Client;
+  // 4) Просим faucet выдать цепь этому клиенту
+  const chainId: string = await (faucet as any).claimChain(client as any);
+  console.log("[lineraClient] chainId from faucet =", chainId);
 
-  // 5) Берём frontend твоего приложения по APP_ID.
-  const frontend = (client as any).frontend();
+  // 5) Берём frontend твоего приложения по APP_ID
+  const frontend = client.frontend();
   const application: Application = await frontend.application(appId);
 
+  console.log("[lineraClient] backend (Application) ready");
   return application;
 }
+
 
 async function getBackend(): Promise<Application> {
   if (!backendPromise) {
@@ -111,10 +107,10 @@ async function getBackend(): Promise<Application> {
 }
 
 // Инициализация при загрузке страницы (по просьбе ребят из dev-чата)
-async function init(): Promise<void> {
+async function init() {
   try {
     await getBackend();
-    console.log("[lineraClient] init: backend ready");
+    console.log("[lineraClient] init ok");
   } catch (e) {
     console.error("[lineraClient] init failed:", e);
   }
