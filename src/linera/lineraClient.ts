@@ -83,31 +83,25 @@ async function createBackend(): Promise<Application> {
   // 1) Фаусет Conway testnet
   const faucet = new Faucet(faucetUrl);
 
-  // 2) Временный кошелек через фаусет
-  const wallet = (await (faucet as any).createWallet()) as Wallet;
+  // 2) Кошелёк
+  const wallet = await faucet.createWallet();
   console.log("[lineraClient] wallet =", wallet);
 
-  // 3) ВАЖНО: Client создаётся асинхронно, нужен await new Client(wallet)
-  const client = (await new (Client as any)(wallet as any)) as Client;
+  // 3) Клиент поверх кошелька
+  const client = new Client(wallet);
   console.log("[lineraClient] client created =", client);
 
-  // 4) Просим фаусет выдать цепь этому client’у
-  const chainId = await (faucet as any).claimChain(client as any);
-  console.log("[lineraClient] chainId from faucet =", chainId);
+  // 4) Claim chain — ВАЖНО: сюда передаём ИМЕННО client
+  const chainId = await faucet.claimChain(client);
+  console.log("[lineraClient] chain id =", chainId);
 
-  // 5) Берём frontend приложения по APP_ID
+  // 5) Frontend приложения по APP_ID
   const frontend = client.frontend();
-  const application = (await frontend.application(appId)) as Application;
+  const application: Application = await frontend.application(appId);
 
   return application;
 }
 
-async function getBackend(): Promise<Application> {
-  if (!backendPromise) {
-    backendPromise = createBackend();
-  }
-  return backendPromise;
-}
 
 // Инициализация при загрузке страницы (как уже сделано)
 async function init() {
