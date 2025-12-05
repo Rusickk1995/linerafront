@@ -985,25 +985,27 @@ async function createTournamentMutation(params: {
   config: TournamentConfig;
 }): Promise<MutationAck> {
   const query = `
-    mutation CreateTournament($tournamentId: Int!, $configJson: String!) {
-      createTournament(tournamentId: $tournamentId, configJson: $configJson) {
+    mutation CreateTournament($tournamentId: Int!, $config: Json!) {
+      createTournament(tournamentId: $tournamentId, config: $config) {
         ok
         message
       }
     }
   `;
 
-  const wireConfig = mapUiTournamentConfigToWire(params.config);
-  const configJson = JSON.stringify(wireConfig);
+  // Готовим JSON строго в формате TournamentConfig
+  const wireConfig: WireTournamentConfig =
+    mapUiTournamentConfigToWire(params.config);
 
   type Resp = {
-    createTournament?: any;
-    create_tournament?: any;
+    createTournament?: MutationAck;
+    create_tournament?: MutationAck;
   };
 
   const data = await callServiceGraphQL<Resp>(query, {
     tournamentId: params.tournamentId,
-    configJson,
+    // ВАЖНО: передаём объект, а не строку
+    config: wireConfig,
   });
 
   return extractAckFromResponse(
