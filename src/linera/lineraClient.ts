@@ -77,17 +77,17 @@ async function createBackend(): Promise<Application> {
   const appId = requireEnv("VITE_LINERA_APP_ID", APP_ID);
   const faucetUrl = requireEnv("VITE_LINERA_FAUCET_URL", FAUCET_URL);
 
-  // 1) Создаём faucet (Conway testnet)
-  const faucet: Faucet = await new (Faucet as any)(faucetUrl);
+  // 1) Faucet (Conway testnet)
+  const faucet: Faucet = new (Faucet as any)(faucetUrl);
 
   // 2) Временный кошелёк через faucet
-  const wallet: Wallet = await faucet.createWallet();
+  const wallet: Wallet = await (faucet as any).createWallet();
 
-  // 3) Клиент поверх кошелька (ВАЖНО: именно await new Client(wallet))
-  const client: Client = await new (Client as any)(wallet as any);
+  // 3) Клиент поверх кошелька
+  const client: Client = new (Client as any)(wallet as any);
 
-  // 4) Просим faucet выдать цепь этому клиенту
-  const chainId: string = await (faucet as any).claimChain(client as any);
+  // 4) Просим faucet выдать ЦЕПЬ ЭТОМУ КОШЕЛЬКУ (ВАЖНО: wallet, не client!)
+  const chainId: string = await (faucet as any).claimChain(wallet as any);
   console.log("[lineraClient] chainId from faucet =", chainId);
 
   // 5) Берём frontend твоего приложения по APP_ID
@@ -97,6 +97,7 @@ async function createBackend(): Promise<Application> {
   console.log("[lineraClient] backend (Application) ready");
   return application;
 }
+
 
 
 async function getBackend(): Promise<Application> {
