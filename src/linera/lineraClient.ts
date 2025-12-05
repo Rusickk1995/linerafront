@@ -130,7 +130,20 @@ async function callServiceGraphQL<TData>(
   const payload = { query, variables };
 
   // 2) ВАЖНО: отправляем СТРОКУ, потому что Query = String
-  const raw = await backend.query(JSON.stringify(payload));
+  let raw: any;
+  try {
+    raw = await backend.query(JSON.stringify(payload));
+  } catch (e: any) {
+    console.error("[callServiceGraphQL] backend.query threw:", e);
+    console.error("[callServiceGraphQL] error name =", e?.name);
+    console.error("[callServiceGraphQL] error message =", e?.message);
+    console.error(
+      "[callServiceGraphQL] error constructor =",
+      e && Object.getPrototypeOf(e)?.constructor?.name
+    );
+    throw e;
+  }
+
 
   // 3) Разбираем ответ (это тоже строка JSON)
   let parsed: GraphQLResponse<TData>;
