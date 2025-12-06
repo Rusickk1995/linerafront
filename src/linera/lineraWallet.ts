@@ -1,13 +1,13 @@
 // src/linera/lineraWallet.ts
 //
-// Conway Testnet frontend:
+// Conway Testnet frontend строго по офф. докам:
 //
-//  1) await linera.default()              – init WASM
-//  2) new linera.Faucet(...)             – Conway faucet
-//  3) faucet.createWallet()              – кошелёк
-//  4) new linera.Client(wallet)          – client
-//  5) faucet.claimChain(client)          – создаём microchain
-//  6) client.frontend().application(ID)
+//  1) await linera.default()                    – init WASM
+//  2) new linera.Faucet(LINERA_FAUCET_URL)     – Conway faucet
+//  3) faucet.createWallet()                    – кошелёк
+//  4) new linera.Client(wallet)                – клиент
+//  5) faucet.claimChain(client)                – создаём microchain
+//  6) client.frontend().application(APP_ID)    – backend твоего приложения
 
 import * as linera from "@linera/client";
 import { LINERA_APP_ID, LINERA_FAUCET_URL } from "./lineraEnv";
@@ -20,6 +20,8 @@ export type Faucet = linera.Faucet;
 let wasmInitPromise: Promise<void> | null = null;
 let backendPromise: Promise<Application> | null = null;
 
+// ====================== init WASM ======================
+
 async function ensureWasmInitialized(): Promise<void> {
   if (!wasmInitPromise) {
     const initFn = (linera as any).default;
@@ -30,6 +32,8 @@ async function ensureWasmInitialized(): Promise<void> {
   }
   await wasmInitPromise;
 }
+
+// ====================== backend ========================
 
 async function createBackend(): Promise<Application> {
   await ensureWasmInitialized();
@@ -55,7 +59,7 @@ async function createBackend(): Promise<Application> {
   const client = (await new ClientCtor(wallet as any)) as Client;
   console.log("[lineraWallet] client created =", client);
 
-  // 4) Claim chain
+  // 4) Claim chain — как в доках: claimChain(client)
   try {
     const chainId = await (faucet as any).claimChain(client as any);
     console.log("[lineraWallet] claimChain ok, chainId =", chainId);
@@ -74,6 +78,8 @@ async function createBackend(): Promise<Application> {
   return application;
 }
 
+// Публичный API, как у тебя и было
+
 export async function getBackend(): Promise<Application> {
   if (!backendPromise) {
     backendPromise = createBackend();
@@ -81,6 +87,7 @@ export async function getBackend(): Promise<Application> {
   return backendPromise;
 }
 
+// Можно ждать lineraReady при старте страницы
 export const lineraReady: Promise<void> = getBackend().then(() => {
   console.log("[lineraWallet] ready");
 });
