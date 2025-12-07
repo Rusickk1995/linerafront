@@ -4,6 +4,8 @@ import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { getBackend } from "../linera/lineraClient";
 
+const isDev = import.meta.env.DEV;
+
 const LandingPage: React.FC = () => {
   const navigate = useNavigate();
 
@@ -18,23 +20,68 @@ const LandingPage: React.FC = () => {
 
     try {
       console.log("[LandingPage] Connecting to Linera backend...");
+      const startedAt = Date.now();
+
       // Здесь под капотом:
       //  - initLinera()
       //  - Faucet + createWallet()
       //  - claimChain()
       //  - Client + Application(APP_ID)
-      await getBackend();
+      const backend = await getBackend();
 
-      console.log("[LandingPage] Linera backend ready, navigating to lobby");
-      // Куда пускать после подключения – решай сам:
-      // "/lobby" или "/create".
-      navigate("/lobby");
-    } catch (e) {
-      console.error("[LandingPage] Failed to connect to Linera backend:", e);
-
-      setErrorMessage(
-        "Не удалось подключиться к Linera testnet. Попробуйте обновить страницу или зайти позже."
+      const elapsed = Date.now() - startedAt;
+      console.log(
+        "[LandingPage] getBackend() resolved in",
+        elapsed,
+        "ms; backend =",
+        backend
       );
+
+      // Защитимся от тихого null/undefined
+      if (!backend) {
+        const err = new Error(
+          "getBackend() вернул null/undefined — Linera backend не инициализирован"
+        );
+        console.error("[LandingPage] Backend is falsy:", err);
+        throw err;
+      }
+
+      console.log(
+        "[LandingPage] Linera backend ready, navigating to lobby..."
+      );
+      navigate("/lobby");
+    } catch (e: unknown) {
+      const err = e as any;
+
+      console.error("[LandingPage] Failed to connect to Linera backend:", err);
+
+      // Базовое сообщение для пользователя
+      let userMessage =
+        "Не удалось подключиться к Linera testnet. Попробуйте обновить страницу или зайти позже.";
+
+      // Если есть текст ошибки — добавим его
+      if (err?.message) {
+        userMessage += `\nДетали: ${String(err.message)}`;
+      }
+
+      // В dev-режиме выводим максимум данных в консоль
+      if (isDev) {
+        // Часто полезно увидеть stack и возможный ответ backend’а
+        const debugDetails = {
+          name: err?.name,
+          message: err?.message,
+          stack: err?.stack,
+          cause: err?.cause,
+          response: err?.response,
+          lineraError: err?.lineraError,
+        };
+        console.error(
+          "[LandingPage] Debug error details (dev only):",
+          debugDetails
+        );
+      }
+
+      setErrorMessage(userMessage);
     } finally {
       setIsConnecting(false);
     }
@@ -82,7 +129,9 @@ const LandingPage: React.FC = () => {
             </p>
 
             {errorMessage && (
-              <p className="text-xs text-red-400 max-w-md">{errorMessage}</p>
+              <p className="text-xs text-red-400 whitespace-pre-line max-w-md">
+                {errorMessage}
+              </p>
             )}
           </div>
         </div>
