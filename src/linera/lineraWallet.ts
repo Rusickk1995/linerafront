@@ -60,7 +60,7 @@ async function createBackend(): Promise<BackendContext> {
   log("Initializing Linera wallet backend…");
 
   try {
-    // 1) Полная инициализация кошелька (локальный ключ + Conway client)
+    // 1) Инициализация локального кошелька (ED25519 + storage, без сети)
     const initResult: WalletInitResult = await withTimeout(
       initWallet(),
       "initWallet()"
@@ -75,12 +75,24 @@ async function createBackend(): Promise<BackendContext> {
       throw new Error(msg);
     }
 
-    // 2) Conway client (дублируем вызов на всякий случай, но он кешируется)
-    const client: Client = await withTimeout(
-      getLineraClient(),
-      "getLineraClient()"
+    // 2) Conway client
+    // DIAGNOSTICS: проверяем, резолвится ли getLineraClient вообще,
+    // чтобы увидеть, висит он или отстреливается с ошибкой.
+    log("Calling getLineraClient()…");
+
+    const client: Client = await getLineraClient().then(
+      (c) => {
+        log("[DEBUG] getLineraClient RESOLVED");
+        return c;
+      },
+      (e) => {
+        // eslint-disable-next-line no-console
+        console.error("[DEBUG] getLineraClient REJECTED:", e);
+        throw e;
+      }
     );
-    log("getLineraClient completed");
+
+    log("getLineraClient returned control");
 
     const clientWithFrontend = client as unknown as FrontendLike;
 
