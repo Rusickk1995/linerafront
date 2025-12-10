@@ -16,7 +16,7 @@ importers:
         version: 0.15.7
       '@linera/wallet-sdk':
         specifier: github:Rusickk1995/linera-wallet#main
-        version: https://codeload.github.com/Rusickk1995/linera-wallet/tar.gz/18facf199a6098df969f9b10f785e1366872b649
+        version: https://codeload.github.com/Rusickk1995/linera-wallet/tar.gz/0e6ae74dcdde7577622e46c34fda9423c6be47b8
       '@supabase/supabase-js':
         specifier: ^2.57.4
         version: 2.86.2
@@ -379,9 +379,9 @@ packages:
   '@linera/client@0.15.7':
     resolution: {integrity: sha512-W2zbV/wuPxEnVIlheQhrdA6wiHQNxytHcn4ndQH/BUKXw8vNidH9wugypZTK8yNZUvL6rqef87F7hH548R0RUg==}
 
-  '@linera/wallet-sdk@https://codeload.github.com/Rusickk1995/linera-wallet/tar.gz/18facf199a6098df969f9b10f785e1366872b649':
-    resolution: {tarball: https://codeload.github.com/Rusickk1995/linera-wallet/tar.gz/18facf199a6098df969f9b10f785e1366872b649}
-    version: 1.0.6
+  '@linera/wallet-sdk@https://codeload.github.com/Rusickk1995/linera-wallet/tar.gz/0e6ae74dcdde7577622e46c34fda9423c6be47b8':
+    resolution: {tarball: https://codeload.github.com/Rusickk1995/linera-wallet/tar.gz/0e6ae74dcdde7577622e46c34fda9423c6be47b8}
+    version: 1.0.7
 
   '@noble/curves@1.2.0':
     resolution: {integrity: sha512-oYclrNgRaM9SsBUBVbb8M6DTV7ZHRTKugureoYEncY5c65HOmRzvSiTE3y5CYaPYJA/GVkrhXEoF0M3Ya9PMnw==}
@@ -1719,7 +1719,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@linera/wallet-sdk@https://codeload.github.com/Rusickk1995/linera-wallet/tar.gz/18facf199a6098df969f9b10f785e1366872b649':
+  '@linera/wallet-sdk@https://codeload.github.com/Rusickk1995/linera-wallet/tar.gz/0e6ae74dcdde7577622e46c34fda9423c6be47b8':
     dependencies:
       '@linera/client': 0.15.7
       bs58: 6.0.0
