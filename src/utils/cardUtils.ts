@@ -1,4 +1,4 @@
-import { Suit, Rank } from '../types/poker';
+import { Suit } from '../types/poker';
 
 export const getSuitSymbol = (suit: Suit): string => {
   const symbols = {

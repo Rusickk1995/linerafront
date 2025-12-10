@@ -20,6 +20,19 @@ import {
   GameState,
 } from "../types/poker";
 
+// Расширенный UI-тип состояния стола для фронта:
+// берём базовый GameState и добавляем явное поле street (Preflop/Flop/Turn/River и т.п.).
+export interface UiGameState extends GameState {
+  street: string;
+}
+
+// Удобный тип результата маппера, чтобы использовать его в TablePage без any.
+export interface UiTableFromOnchain {
+  players: Player[];
+  communityCards: UICard[];
+  gameState: UiGameState;
+}
+
 // =====================
 // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // =====================
@@ -84,7 +97,10 @@ export function mapRank(rank: string): UIRank {
  * Card (Rust) -> UICard (фронт).
  * hole_cards для UI мы будем помечать hidden = true, если это не герой.
  */
-export function mapCard(card: OnChainCard, hidden: boolean = false): UICard {
+export function mapCard(
+  card: OnChainCard,
+  hidden: boolean = false
+): UICard {
   return {
     suit: mapSuit(card.suit),
     rank: mapRank(card.rank),
@@ -103,7 +119,8 @@ function deriveStatusFlags(status: string): {
 
   return {
     isFolded: normalized.includes("fold"),
-    isAllIn: normalized.includes("allin") || normalized.includes("all_in"),
+    isAllIn:
+      normalized.includes("allin") || normalized.includes("all_in"),
   };
 }
 
@@ -113,20 +130,24 @@ function deriveStatusFlags(status: string): {
 
 /**
  * Преобразование OnChainPlayerAtTableDto -> Player (UI-тип).
+ *
+ * heroPlayerId здесь — строковый id героя, как и в Player.id и OvalTable.heroId.
  */
 export function mapPlayer(
   p: OnChainPlayerAtTableDto,
   dealerSeat: number | null,
   smallBlindSeat: number | null,
   bigBlindSeat: number | null,
-  heroPlayerId?: number
+  heroPlayerId?: string
 ): Player {
   const { isFolded, isAllIn } = deriveStatusFlags(p.status);
 
-  const isHero = heroPlayerId !== undefined && p.player_id === heroPlayerId;
+  const isHero =
+    heroPlayerId !== undefined && String(p.player_id) === heroPlayerId;
 
   const cards =
-    p.hole_cards?.map((c: OnChainCard) => mapCard(c, !isHero)) ?? undefined;
+    p.hole_cards?.map((c: OnChainCard) => mapCard(c, !isHero)) ??
+    undefined;
 
   return {
     id: String(p.player_id),
@@ -197,16 +218,12 @@ function computeBlindSeats(
  * Преобразование OnChainTableViewDto -> UI-структуры:
  * - players: Player[]
  * - communityCards: UICard[]
- * - gameState: GameState
+ * - gameState: UiGameState
  */
 export function mapTableToUi(
   table: OnChainTableViewDto,
-  heroPlayerId?: number
-): {
-  players: Player[];
-  communityCards: UICard[];
-  gameState: GameState;
-} {
+  heroPlayerId?: string
+): UiTableFromOnchain {
   const dealerSeat = table.dealer_button;
   const { smallBlindSeat, bigBlindSeat } = computeBlindSeats(
     dealerSeat,
@@ -214,12 +231,19 @@ export function mapTableToUi(
     table.max_seats
   );
 
-  const players: Player[] = table.players.map((p: OnChainPlayerAtTableDto) =>
-    mapPlayer(p, dealerSeat, smallBlindSeat, bigBlindSeat, heroPlayerId)
+  const players: Player[] = table.players.map(
+    (p: OnChainPlayerAtTableDto) =>
+      mapPlayer(
+        p,
+        dealerSeat,
+        smallBlindSeat,
+        bigBlindSeat,
+        heroPlayerId
+      )
   );
 
-  const communityCards: UICard[] = table.board.map((c: OnChainCard) =>
-    mapCard(c, false)
+  const communityCards: UICard[] = table.board.map(
+    (c: OnChainCard) => mapCard(c, false)
   );
 
   const currentBet = table.players.reduce(
@@ -240,7 +264,8 @@ export function mapTableToUi(
         )
       : "";
 
-  const gameState: GameState = {
+  const gameState: UiGameState = {
+    // поля из базового GameState (types/poker.ts)
     pot: table.total_pot,
     communityCards,
     currentBet,
@@ -248,6 +273,9 @@ export function mapTableToUi(
     boardTexture: table.street,
     currentPlayer: currentPlayerId,
     timeRemaining: 0,
+
+    // расширение под TablePage / OvalTable
+    street: table.street,
   };
 
   return {
@@ -256,9 +284,6 @@ export function mapTableToUi(
     gameState,
   };
 }
-
-// Удобный тип результата маппера, чтобы не было any в TablePage.
-export type UiTableFromOnchain = ReturnType<typeof mapTableToUi>;
 
 // =====================
 // МАППИНГ ТУРНИРА

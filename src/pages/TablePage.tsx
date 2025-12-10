@@ -29,14 +29,21 @@ import OvalTable from "../components/OvalTable";
 import { DEV_MULTI_SEAT_MODE } from "../config/devFlags";
 import DevTableTools from "../components/DevTableTools";
 
-// Временный игрок (как во всех dev-страницах)
+// Временный игрок (как во всех dev-страницах).
+// Внимание: в UI Player.id и heroId строковые, поэтому здесь тоже строка.
 const DEV_PLAYER_ID = "1";
 
-type PlayerActionKindUi =
+// Локальный UI-тип действий. Это НЕ on-chain enum, а именно то,
+// что приходит из кнопок интерфейса.
+type PlayerActionKindUiButton =
   | "fold"
   | "check_or_call"
   | "bet"
   | "raise";
+
+// Тип действий, который реально уходит в sendPlayerAction / on-chain.
+// Соответствует PlayerActionKindUi из pokerApi.
+type PlayerActionKindWire = "fold" | "check" | "call" | "bet" | "raise";
 
 const TablePage: React.FC = () => {
   const navigate = useNavigate();
@@ -48,8 +55,9 @@ const TablePage: React.FC = () => {
     return tableIdParam;
   }, [tableIdParam]);
 
-  const [onchainView, setOnchainView] =
-    useState<OnChainTableViewDto | null>(null);
+  // onchainView сейчас используется только как "сырой" снимок,
+  // но мы его оставляем (может пригодиться для дебага / будущих фич).
+  const [, setOnchainView] = useState<OnChainTableViewDto | null>(null);
 
   const [uiView, setUiView] =
     useState<UiTableFromOnchain | null>(null);
@@ -87,7 +95,7 @@ const TablePage: React.FC = () => {
 
         const ui = mapTableToUi(onchain, DEV_PLAYER_ID);
         setUiView(ui);
-      } catch (e: unknown) {
+      } catch (e) {
         const message =
           e instanceof Error ? e.message : "Failed to load table";
         setError(message);
@@ -107,14 +115,14 @@ const TablePage: React.FC = () => {
 
   // ---------------------------- ACTION HANDLER ----------------------------
 
-  const handleSendAction = async (kind: PlayerActionKindUi) => {
+  const handleSendAction = async (kind: PlayerActionKindUiButton) => {
     if (!tableId || !uiView) return;
 
     setCommandLoading(true);
     setError(null);
 
     try {
-      let action: "fold" | "check" | "call" | "bet" | "raise" = "fold";
+      let action: PlayerActionKindWire = "fold";
       let amount: number | undefined;
 
       const currentBet = uiView.gameState.currentBet;
@@ -141,7 +149,7 @@ const TablePage: React.FC = () => {
 
       await sendPlayerAction(tableId, action, amount);
       await loadTable(tableId);
-    } catch (e: unknown) {
+    } catch (e) {
       const message =
         e instanceof Error ? e.message : "Failed to send action";
       setError(message);

@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.app.json"
   },
   "dependencies": {
-    "@linera/client": "0.15.6",
+    "@linera/client": "0.15.7",
     "@linera/wallet-sdk": "github:Rusickk1995/linera-wallet#main",
     "@supabase/supabase-js": "^2.57.4",
     "lucide-react": "^0.344.0",
@@ -37,7 +37,7 @@
   },
   "pnpm": {
     "overrides": {
-      "@linera/client": "0.15.6"
+      "@linera/client": "0.15.7"
     }
   }
 }

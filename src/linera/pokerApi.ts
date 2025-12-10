@@ -30,6 +30,11 @@ interface GraphQLResponse<TData> {
   errors?: { message: string }[];
 }
 
+/** Минимальный интерфейс backend'a, который нам нужен для GraphQL. */
+interface BackendWithQuery {
+  query(body: string): Promise<string>;
+}
+
 /**
  * Главная точка входа: отправка GraphQL-запроса в твой Poker service
  * через Linera Web client (без локального HTTP GraphQL).
@@ -38,31 +43,22 @@ async function callServiceGraphQL<TData>(
   query: string,
   variables?: Record<string, unknown>
 ): Promise<TData> {
-  const backend = await getBackend();
+  const backend = (await getBackend()) as unknown as BackendWithQuery;
 
-  // 1) Формируем payload { query, variables }
   const payload = { query, variables };
 
-  // 2) ВАЖНО: отправляем СТРОКУ, потому что Query = String
-  let raw: any;
+  let raw: string;
   try {
     raw = await backend.query(JSON.stringify(payload));
-  } catch (e: any) {
+  } catch (e) {
     console.error("[callServiceGraphQL] backend.query threw:", e);
-    console.error("[callServiceGraphQL] error name =", e?.name);
-    console.error("[callServiceGraphQL] error message =", e?.message);
-    console.error(
-      "[callServiceGraphQL] error constructor =",
-      e && Object.getPrototypeOf(e)?.constructor?.name
-    );
     throw e;
   }
 
-  // 3) Разбираем ответ (это тоже строка JSON)
   let parsed: GraphQLResponse<TData>;
   try {
     parsed = JSON.parse(raw) as GraphQLResponse<TData>;
-  } catch (e) {
+  } catch {
     console.error("[callServiceGraphQL] Failed to parse response", raw);
     throw new Error("Invalid JSON from backend.query()");
   }
@@ -157,6 +153,14 @@ export interface MutationAck {
 //                  Хелперы для ACK (MutationAck)
 // ============================================================================
 
+/** Внутренний вид ACK от бэкенда (любой вариант). */
+interface RawAckShape {
+  ok?: unknown;
+  success?: unknown;
+  message?: unknown;
+  error?: unknown;
+}
+
 /**
  * Нормализация произвольного ответа бэкенда к MutationAck.
  * Поддерживает:
@@ -164,8 +168,8 @@ export interface MutationAck {
  *  - { success: bool, error?: string }
  *  - любые truthy / falsy значения в raw.ok.
  */
-function normalizeAck(raw: any, context: string): MutationAck {
-  if (!raw || typeof raw !== "object") {
+function normalizeAck(raw: unknown, context: string): MutationAck {
+  if (raw === null || typeof raw !== "object") {
     console.error(`[pokerApi] ${context} raw non-object ack:`, raw);
     return {
       ok: true,
@@ -173,24 +177,27 @@ function normalizeAck(raw: any, context: string): MutationAck {
     };
   }
 
+  const obj = raw as RawAckShape;
+
   let ok: boolean;
-  if (typeof raw.ok === "boolean") {
-    ok = raw.ok;
-  } else if (typeof raw.success === "boolean") {
-    ok = raw.success;
-  } else if (raw.ok != null) {
-    ok = Boolean(raw.ok);
-  } else if (raw.success != null) {
-    ok = Boolean(raw.success);
+
+  if (typeof obj.ok === "boolean") {
+    ok = obj.ok;
+  } else if (typeof obj.success === "boolean") {
+    ok = obj.success;
+  } else if (obj.ok != null) {
+    ok = Boolean(obj.ok);
+  } else if (obj.success != null) {
+    ok = Boolean(obj.success);
   } else {
     ok = true;
   }
 
   let message = "";
-  if (typeof raw.message === "string") {
-    message = raw.message;
-  } else if (typeof raw.error === "string") {
-    message = raw.error;
+  if (typeof obj.message === "string") {
+    message = obj.message;
+  } else if (typeof obj.error === "string") {
+    message = obj.error;
   }
 
   return { ok, message };
@@ -200,12 +207,10 @@ function normalizeAck(raw: any, context: string): MutationAck {
  * Достаёт ack из объекта ответа по нескольким возможным названиям полей.
  */
 function extractAckFromResponse(
-  data: any,
+  data: unknown,
   fieldNames: string[],
   context: string
 ): MutationAck {
-  // Если бэкенд вернул просто строку / число / null (как хэш операции),
-  // считаем, что всё ок и не спамим ошибками.
   if (data === null || typeof data !== "object") {
     console.log(
       `[pokerApi] ${context}: non-object GraphQL data (treated as ok):`,
@@ -217,9 +222,11 @@ function extractAckFromResponse(
     };
   }
 
+  const obj = data as Record<string, unknown>;
+
   for (const field of fieldNames) {
-    if (Object.prototype.hasOwnProperty.call(data, field)) {
-      return normalizeAck((data as any)[field], context);
+    if (Object.prototype.hasOwnProperty.call(obj, field)) {
+      return normalizeAck(obj[field], context);
     }
   }
 
@@ -255,7 +262,7 @@ function mapPlayer(g: GqlPlayerAtTable): OnChainPlayerAtTableDto {
 
 function mapTable(g: GqlTableView): OnChainTableViewDto {
   return {
-    table_id: Number(g.tableId), // из String в number для твоего DTO
+    table_id: g.tableId,
     name: g.name,
     max_seats: g.maxSeats,
     small_blind: g.smallBlind,
@@ -295,7 +302,7 @@ function mapSummary(g: GqlSummary): SummaryResponse {
 // ============================================================================
 
 export async function fetchTable(
-  tableId: number
+  tableId: string
 ): Promise<OnChainTableViewDto | null> {
   const query = `
     query FetchTable($tableId: String!) {
@@ -327,9 +334,7 @@ export async function fetchTable(
 
   type Resp = { table: GqlTableView | null };
 
-  const data = await callServiceGraphQL<Resp>(query, {
-    tableId: String(tableId),
-  });
+  const data = await callServiceGraphQL<Resp>(query, { tableId });
   if (!data.table) return null;
   return mapTable(data.table);
 }
@@ -471,7 +476,7 @@ export async function fetchSummary(): Promise<SummaryResponse> {
 // ============================================================================
 
 export async function createTable(params: {
-  tableId: number;
+  tableId: string;
   name: string;
   maxSeats: number;
   smallBlind: number;
@@ -505,16 +510,11 @@ export async function createTable(params: {
   `;
 
   type Resp = {
-    createTable?: any;
-    create_table?: any;
+    createTable?: unknown;
+    create_table?: unknown;
   };
 
-  const variables = {
-    ...params,
-    tableId: String(params.tableId),
-  };
-
-  const data = await callServiceGraphQL<Resp>(query, variables);
+  const data = await callServiceGraphQL<Resp>(query, params);
   return extractAckFromResponse(
     data,
     ["createTable", "create_table"],
@@ -523,7 +523,7 @@ export async function createTable(params: {
 }
 
 export async function seatPlayer(params: {
-  tableId: number;
+  tableId: string;
   playerId: number;
   seatIndex: number;
   displayName: string;
@@ -551,16 +551,11 @@ export async function seatPlayer(params: {
   `;
 
   type Resp = {
-    seatPlayer?: any;
-    seat_player?: any;
+    seatPlayer?: unknown;
+    seat_player?: unknown;
   };
 
-  const variables = {
-    ...params,
-    tableId: String(params.tableId),
-  };
-
-  const data = await callServiceGraphQL<Resp>(query, variables);
+  const data = await callServiceGraphQL<Resp>(query, params);
   return extractAckFromResponse(
     data,
     ["seatPlayer", "seat_player"],
@@ -569,7 +564,7 @@ export async function seatPlayer(params: {
 }
 
 export async function unseatPlayer(params: {
-  tableId: number;
+  tableId: string;
   seatIndex: number;
 }): Promise<MutationAck> {
   const query = `
@@ -582,16 +577,11 @@ export async function unseatPlayer(params: {
   `;
 
   type Resp = {
-    unseatPlayer?: any;
-    unseat_player?: any;
+    unseatPlayer?: unknown;
+    unseat_player?: unknown;
   };
 
-  const variables = {
-    ...params,
-    tableId: String(params.tableId),
-  };
-
-  const data = await callServiceGraphQL<Resp>(query, variables);
+  const data = await callServiceGraphQL<Resp>(query, params);
   return extractAckFromResponse(
     data,
     ["unseatPlayer", "unseat_player"],
@@ -600,7 +590,7 @@ export async function unseatPlayer(params: {
 }
 
 export async function adjustStack(params: {
-  tableId: number;
+  tableId: string;
   seatIndex: number;
   delta: number;
 }): Promise<MutationAck> {
@@ -614,16 +604,11 @@ export async function adjustStack(params: {
   `;
 
   type Resp = {
-    adjustStack?: any;
-    adjust_stack?: any;
+    adjustStack?: unknown;
+    adjust_stack?: unknown;
   };
 
-  const variables = {
-    ...params,
-    tableId: String(params.tableId),
-  };
-
-  const data = await callServiceGraphQL<Resp>(query, variables);
+  const data = await callServiceGraphQL<Resp>(query, params);
   return extractAckFromResponse(
     data,
     ["adjustStack", "adjust_stack"],
@@ -632,7 +617,7 @@ export async function adjustStack(params: {
 }
 
 export async function startHand(params: {
-  tableId: number;
+  tableId: string;
   handId: number;
 }): Promise<MutationAck> {
   const query = `
@@ -645,16 +630,11 @@ export async function startHand(params: {
   `;
 
   type Resp = {
-    startHand?: any;
-    start_hand?: any;
+    startHand?: unknown;
+    start_hand?: unknown;
   };
 
-  const variables = {
-    ...params,
-    tableId: String(params.tableId),
-  };
-
-  const data = await callServiceGraphQL<Resp>(query, variables);
+  const data = await callServiceGraphQL<Resp>(query, params);
   return extractAckFromResponse(
     data,
     ["startHand", "start_hand"],
@@ -689,7 +669,7 @@ function mapUiActionToGql(kind: PlayerActionKindUi): GqlPlayerActionKind {
 }
 
 export async function playerAction(params: {
-  tableId: number;
+  tableId: string;
   action: PlayerActionKindUi;
   amount?: number;
 }): Promise<MutationAck> {
@@ -707,14 +687,14 @@ export async function playerAction(params: {
   `;
 
   const variables = {
-    tableId: String(params.tableId),
+    tableId: params.tableId,
     action: mapUiActionToGql(params.action),
     amount: params.amount ?? null,
   };
 
   type Resp = {
-    playerAction?: any;
-    player_action?: any;
+    playerAction?: unknown;
+    player_action?: unknown;
   };
 
   const data = await callServiceGraphQL<Resp>(query, variables);
@@ -726,7 +706,7 @@ export async function playerAction(params: {
 }
 
 export async function tickTable(params: {
-  tableId: number;
+  tableId: string;
   deltaSecs: number;
 }): Promise<MutationAck> {
   const query = `
@@ -739,16 +719,11 @@ export async function tickTable(params: {
   `;
 
   type Resp = {
-    tickTable?: any;
-    tick_table?: any;
+    tickTable?: unknown;
+    tick_table?: unknown;
   };
 
-  const variables = {
-    ...params,
-    tableId: String(params.tableId),
-  };
-
-  const data = await callServiceGraphQL<Resp>(query, variables);
+  const data = await callServiceGraphQL<Resp>(query, params);
   return extractAckFromResponse(
     data,
     ["tickTable", "tick_table"],
@@ -914,8 +889,8 @@ async function createTournamentMutation(params: {
   const wireConfig = mapUiTournamentConfigToWire(params.config);
 
   type Resp = {
-    createTournament?: any;
-    create_tournament?: any;
+    createTournament?: unknown;
+    create_tournament?: unknown;
   };
 
   const data = await callServiceGraphQL<Resp>(query, {
@@ -953,8 +928,8 @@ async function registerPlayerToTournamentMutation(params: {
   `;
 
   type Resp = {
-    registerPlayerToTournament?: any;
-    register_player_to_tournament?: any;
+    registerPlayerToTournament?: unknown;
+    register_player_to_tournament?: unknown;
   };
 
   const data = await callServiceGraphQL<Resp>(query, params);
@@ -986,8 +961,8 @@ async function unregisterPlayerFromTournamentMutation(params: {
   `;
 
   type Resp = {
-    unregisterPlayerFromTournament?: any;
-    unregister_player_from_tournament?: any;
+    unregisterPlayerFromTournament?: unknown;
+    unregister_player_from_tournament?: unknown;
   };
 
   const data = await callServiceGraphQL<Resp>(query, params);
@@ -1012,8 +987,8 @@ export async function startTournamentMutation(params: {
   `;
 
   type Resp = {
-    startTournament?: any;
-    start_tournament?: any;
+    startTournament?: unknown;
+    start_tournament?: unknown;
   };
 
   const data = await callServiceGraphQL<Resp>(query, params);
@@ -1038,8 +1013,8 @@ export async function advanceTournamentLevelMutation(params: {
   `;
 
   type Resp = {
-    advanceTournamentLevel?: any;
-    advance_tournament_level?: any;
+    advanceTournamentLevel?: unknown;
+    advance_tournament_level?: unknown;
   };
 
   const data = await callServiceGraphQL<Resp>(query, params);
@@ -1064,8 +1039,8 @@ export async function closeTournamentMutation(params: {
   `;
 
   type Resp = {
-    closeTournament?: any;
-    close_tournament?: any;
+    closeTournament?: unknown;
+    close_tournament?: unknown;
   };
 
   const data = await callServiceGraphQL<Resp>(query, params);
@@ -1183,7 +1158,7 @@ export async function closeTournament(
 }
 
 export async function sendPlayerAction(
-  tableId: number,
+  tableId: string,
   action: PlayerActionKindUi,
   amount?: number
 ): Promise<OnChainTableViewDto | null> {

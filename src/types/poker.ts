@@ -88,6 +88,9 @@ export type UICard = {
   hidden?: boolean;
 };
 
+export type Suit = UISuit;
+export type Rank = UIRank;
+
 // Игрок для простых демо-страниц (Home/Lobby/Table и т.п.)
 export type Player = {
   id: string;
